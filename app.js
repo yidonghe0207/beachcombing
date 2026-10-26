@@ -645,9 +645,9 @@ const FONT_SETS = {
   scanLabel.innerHTML = `<b>64</b><small>numbers</small>`;
   labelBox.appendChild(scanLabel);
 
-  // the archipelago's names, shown at the bench. Each group's largest island (shells within 1.3 units of one
-  // another) carries its name, anchored on the member nearest the island's centre so the pin lands on land;
-  // in the grid the same is done with neighbouring tiles. A second island of 15 or more gets a minor name.
+  // the archipelago's names, shown at the bench in the free arrangement only. Each group's largest island (shells
+  // within 1.3 units of one another) carries its name, anchored on the member nearest the island's centre so the
+  // pin lands on land. A second island of 15 or more gets a minor name.
   const ISLES = [
     { name: "The Spire Marches", text: "Tall, narrow towers wound whorl on whorl, all leaning the same way." },
     { name: "Isle of Ovalness", text: "Smooth, egg-round backs: cowries and cones, and even spined conchs read as ovals here." },
@@ -656,8 +656,8 @@ const FONT_SETS = {
     { name: "The Gaping Coast", text: "Shells seen mouth-first, their wide openings turned up to the sky." },
     { name: "The Coiled Holds", text: "Snails wound tight as sundials, each spiral turning back on itself." },
   ];
-  function islands(members, key, reach) {
-    const pos = (sh) => (key === "free" ? [sh.fx, sh.fz] : [sh.gx, sh.gz]);
+  function islands(members, reach) {
+    const pos = (sh) => [sh.fx, sh.fz];
     const left = new Set(members), out = [];
     while (left.size) {
       const first = left.values().next().value, isle = [first], stack = [first];
@@ -681,7 +681,7 @@ const FONT_SETS = {
   const isles = [];
   ISLES.forEach((d, k) => {
     const members = shell.filter((sh) => sh.s.cluster === k + 1);
-    const free = islands(members, "free", 1.3), grid = islands(members, "grid", 1.05);
+    const free = islands(members, 1.3);
     const make = (cls, html) => {
       const el = document.createElement("div");
       el.className = cls;
@@ -696,12 +696,12 @@ const FONT_SETS = {
     };
     isles.push({
       el: make("isle", `<b>${ROMAN[k]}</b><span>${d.name}</span><em>${d.text}<small>${members.length} shells</small></em>`),
-      free: free[0].at, grid: grid[0].at, freeOnly: false,
+      at: free[0].at,
     });
     if (d.minor && free[1] && free[1].size >= 15)
       isles.push({
         el: make("isle minor", `<span>${d.minor}</span><em>A second shore of the same: ${free[1].size} shells that settled apart.</em>`),
-        free: free[1].at, grid: null, freeOnly: true,
+        at: free[1].at,
       });
   });
   const SVG = "http://www.w3.org/2000/svg";
@@ -720,12 +720,11 @@ const FONT_SETS = {
   function updateIsles(show) {
     const placed = [];
     for (const isle of isles) {
-      const on = show && (isle.freeOnly ? gridMix < 0.5 : true);
+      const on = show && gridMix < 0.5; // the names belong to the free arrangement; they fade out for the grid
       isle.el.classList.toggle("on", on);
       isle.line.style.display = isle.pin.style.display = "none";
       if (!on) { isle.el.classList.remove("open"); continue; }
-      const [fx, fz] = isle.free, [gx, gz] = isle.grid || isle.free;
-      proj.set(lerp(fx, gx, gridMix), 0.3, lerp(fz, gz, gridMix)).project(camera);
+      proj.set(isle.at[0], 0.3, isle.at[1]).project(camera);
       if (proj.z > 1) { isle.el.classList.remove("on"); continue; }
       isle.ax = ((proj.x + 1) / 2) * innerWidth;
       isle.ay = ((1 - proj.y) / 2) * innerHeight;
