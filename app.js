@@ -53,7 +53,10 @@ const FONT_SETS = {
     $("#veil .veil-sub").textContent = "This artwork needs WebGL, which is unavailable in this browser.";
     return;
   }
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+  // the pixel ratio starts at the screen's (up to 1.75) and steps down if frames run slow (see frame())
+  const PR_MAX = Math.min(devicePixelRatio, 1.75), PR_MIN = Math.min(PR_MAX, 0.75);
+  let pixelRatio = PR_MAX;
+  renderer.setPixelRatio(pixelRatio);
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // shaders write display colours directly
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 400);
@@ -133,6 +136,12 @@ const FONT_SETS = {
         }
         void main(){
           vec2 p = vP.xz;
+          // once the shore has become the workshop floor, skip the sand, the water and the sun
+          if (uBoard > .999) {
+            vec3 floorCol = uGround * (.92 + .16*fbm(p*.7)) + (hash(p*211.)-.5)*.02;
+            gl_FragColor = vec4(uSea > .001 ? mix(floorCol, seaCol(p, uGround, uTime), uSea) : floorCol, 1.);
+            return;
+          }
           float fz = uFront + edge(p.x);
           float water = smoothstep(fz-.06, fz+.06, p.y) ; water = 1. - water;   // 1 where p.y < front
           // sand: near-black, grainy, with sparse pale grains
@@ -147,14 +156,16 @@ const FONT_SETS = {
           vec3 sea = vec3(.018,.021,.024) + .012*fbm(p*.5+uTime*.08);
           col = mix(col, sea, water * uTide);
           // digital foam: a lattice of dots whose size follows foam intensity
-          float cell = .085;
-          vec2 g = p/cell; vec2 id = floor(g); vec2 f = fract(g)-.5;
-          float I = foamAt((id+.5)*cell);
-          I *= .75 + .5*hash(id);
-          float r = .48*sqrt(I);
-          float dotm = smoothstep(r+.09, r-.09, length(f)) * step(.04, I);
-          float line = exp(-abs(fz - p.y)*40.) * uTide * (1.-uRecede*.6);
-          col = mix(col, vec3(.95,.94,.9), clamp(dotm*.92 + line*.75, 0., 1.));
+          if (uTide > .001) {
+            float cell = .085;
+            vec2 g = p/cell; vec2 id = floor(g); vec2 f = fract(g)-.5;
+            float I = foamAt((id+.5)*cell);
+            I *= .75 + .5*hash(id);
+            float r = .48*sqrt(I);
+            float dotm = smoothstep(r+.09, r-.09, length(f)) * step(.04, I);
+            float line = exp(-abs(fz - p.y)*40.) * uTide * (1.-uRecede*.6);
+            col = mix(col, vec3(.95,.94,.9), clamp(dotm*.92 + line*.75, 0., 1.));
+          }
           // the sun of chapter II: a warm drying light that sweeps across
           float sun = exp(-pow((p.x - uSunX)/5.5, 2.)) * uSun;
           col += vec3(.20,.13,.06) * sun * (.6 + .4*tone);
@@ -344,6 +355,33 @@ const FONT_SETS = {
   rtShells.frustumCulled = false;
   rtScene.add(rtShells);
 
+  // the blurs the finishes need depend only on the height field, so they are taken once per redraw, not per pixel per frame
+  // r: height blurred at 4 texels, g: at 14, b: shell coverage near the coast (9 and 20), a: coverage at 7
+  const blurRT = new THREE.WebGLRenderTarget(RT_RES, RT_RES, {
+    type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
+  });
+  const blurScene = new THREE.Scene();
+  const blurCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  blurScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+    uniforms: { uH: { value: heightRT.texture }, uTexel: { value: 1 / RT_RES } },
+    depthTest: false, depthWrite: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`,
+    fragmentShader: `
+      uniform sampler2D uH; uniform float uTexel; varying vec2 vUv;
+      vec4 T(vec2 o){ return texture2D(uH, vUv + o*uTexel); }
+      vec4 ring(float r){ return (T(vec2(r,0))+T(vec2(-r,0))+T(vec2(0,r))+T(vec2(0,-r))+T(vec2(r,r)*.7)+T(vec2(-r,r)*.7)+T(vec2(r,-r)*.7)+T(vec2(-r,-r)*.7))*.125; }
+      void main(){ gl_FragColor = vec4(ring(4.).r, ring(14.).r, ring(9.).b*.6 + ring(20.).b*.4, ring(7.).b); }`,
+  })));
+  function drawHeight() {
+    renderer.setRenderTarget(heightRT);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear();
+    renderer.render(rtScene, rtCam);
+    renderer.setRenderTarget(blurRT);
+    renderer.render(blurScene, blurCam);
+    renderer.setRenderTarget(null);
+  }
+
   // in the order they are shown; id is the shader's index
   const FINISHES = [
     { id: 3, name: "Contour", text: "Read as a chart of islands: a line for every 2 mm of rise, and a heavier one every 10 mm.", bg: [0.045, 0.047, 0.05], paper: false },
@@ -356,6 +394,7 @@ const FONT_SETS = {
 
   const terrU = {
     uH: { value: heightRT.texture },
+    uB: { value: blurRT.texture },
     uExag: { value: EXAG },
     uTexel: { value: 1 / RT_RES },
     uWorld: { value: BOARD },
@@ -388,20 +427,19 @@ const FONT_SETS = {
       fragmentShader: `
         ${GLSL_NOISE}
         ${GLSL_SEA}
-        uniform sampler2D uH; uniform float uExag, uTexel, uWorld, uReveal, uFinA, uFinB, uWipe, uGrid, uTime; uniform vec3 uLight, uSeaBase;
+        uniform sampler2D uH, uB; uniform float uExag, uTexel, uWorld, uReveal, uFinA, uFinB, uWipe, uGrid, uTime; uniform vec3 uLight, uSeaBase;
         varying vec2 vUv; varying vec3 vP;
         vec4 T(vec2 o){ return texture2D(uH, vUv + o*uTexel); }
         float H(vec2 o){ return T(o).r; }
-        float h, hb, sh, ao, cav, lap; vec3 n, V;
+        float h, hb, sh, ao, cav, lap; vec3 n, V; vec4 bl;
         float blurAt(float r){ return (H(vec2(r,0))+H(vec2(-r,0))+H(vec2(0,r))+H(vec2(0,-r))+H(vec2(r,r)*.7)+H(vec2(-r,r)*.7)+H(vec2(r,-r)*.7)+H(vec2(-r,-r)*.7))*.125; }
-        float blurS(float r){ return (T(vec2(r,0)).b+T(vec2(-r,0)).b+T(vec2(0,r)).b+T(vec2(0,-r)).b+T(vec2(r,r)*.7).b+T(vec2(-r,r)*.7).b+T(vec2(r,-r)*.7).b+T(vec2(-r,-r)*.7).b)*.125; }
 
         vec3 fossil(){
           vec2 p = vP.xz;
           // dark slate with mottled grains, and a prepared groove around every shell
           vec3 slate = vec3(.17,.16,.145) * (.8 + .35*fbm(p*3.5)) + .05*smoothstep(.6,.8, fbm(p*11.));
           vec3 shellStone = vec3(.6,.58,.5) * (.78 + .35*fbm(p*14. + 2.));
-          float ring = clamp(blurS(7.)*1.6, 0., 1.) * (1. - smoothstep(.02, .3, sh));
+          float ring = clamp(bl.a*1.6, 0., 1.) * (1. - smoothstep(.02, .3, sh));
           vec3 col = mix(slate, shellStone, smoothstep(.05, .35, sh));
           col *= 1. - ring*.55;
           return col * (.35 + .85*max(dot(n, uLight), 0.)) * ao * (1. - cav*.3);
@@ -482,7 +520,8 @@ const FONT_SETS = {
           float dv = (H(vec2(0,1)) - H(vec2(0,-1))) * wsc / (2.*tw);
           n = normalize(vec3(-dx, 1., dv));
           V = normalize(cameraPosition - vP);
-          float b1 = blurAt(4.), b2 = blurAt(14.);
+          bl = texture2D(uB, vUv);
+          float b1 = bl.r, b2 = bl.g;
           ao = clamp(1. - max(b1 - h, 0.)*.09 - max(b2 - h, 0.)*.05, .35, 1.);
           cav = clamp((b1 - h)*.25, 0., 1.);
           lap = H(vec2(1,0)) + H(vec2(-1,0)) + H(vec2(0,1)) + H(vec2(0,-1)) - 4.*h;
@@ -498,7 +537,7 @@ const FONT_SETS = {
           }
           // the sea between the islands, with coastal ripples that echo each shore like a chart
           float land = max(smoothstep(.15, .8, h), smoothstep(.3, .7, t0.g));
-          float near = blurS(9.)*.6 + blurS(20.)*.4;
+          float near = bl.b;
           float ring = fract(near*7.);
           float coastal = (1. - smoothstep(0., fwidth(near*7.)*1.4, min(ring, 1. - ring))) * smoothstep(.0, .05, near) * (1. - smoothstep(.25, .5, near));
           float lum = dot(uSeaBase, vec3(.3,.59,.11));
@@ -799,6 +838,54 @@ const FONT_SETS = {
       `<text class="k-va" x="312" y="${(Y(va[n - 1]) - 6).toFixed(1)}" text-anchor="end">held out</text>`;
   }
 
+  // mouse and pen: drag to move through the story, with a little glide on release.
+  // wheel, touchpad and touch keep the browser's own scrolling.
+  let scrollDrag = null, glide = null;
+  const NO_DRAG = "button, a, input, select, textarea, label, dialog, .bench, .gauge, .masthead";
+  const DRAG_GAIN = 2.2; // a drag across the full screen height moves 2.2 screens of the story
+  addEventListener("pointerdown", (e) => {
+    glide = null;
+    if (e.pointerType === "touch" || e.button !== 0) return;
+    if (benchOn && e.target === canvas) return; // at the bench, dragging turns the work (below)
+    if (e.target.closest(NO_DRAG)) return;
+    e.preventDefault(); // no text selection while dragging
+    scrollDrag = { y: e.clientY, top: scrollY, moved: false, samples: [[performance.now(), e.clientY]] };
+    document.body.classList.add("dragging");
+  });
+  addEventListener("pointermove", (e) => {
+    if (!scrollDrag) return;
+    if (Math.abs(e.clientY - scrollDrag.y) > 3) scrollDrag.moved = true;
+    scrollTo(0, scrollDrag.top - (e.clientY - scrollDrag.y) * DRAG_GAIN);
+    const t = performance.now();
+    scrollDrag.samples.push([t, e.clientY]);
+    while (scrollDrag.samples.length > 2 && t - scrollDrag.samples[0][0] > 90) scrollDrag.samples.shift();
+  });
+  const endScrollDrag = () => {
+    if (!scrollDrag) return;
+    const S = scrollDrag.samples, [t0, y0] = S[0], [tl, y1] = S[S.length - 1], t1 = performance.now();
+    // px of scroll per ms over the last moments of the drag; none if the pointer was held still before release.
+    // capped so a flick glides at most about one and a half screens
+    const vMax = (1.5 * innerHeight) / 260;
+    const v = t1 - tl < 80 && tl - t0 > 8 ? clamp((-(y1 - y0) * DRAG_GAIN) / (tl - t0), -vMax, vMax) : 0;
+    if (scrollDrag.moved && Math.abs(v) > 0.2 && !reduceMotion) glide = { v, t: t1 };
+    scrollDrag = null;
+    document.body.classList.remove("dragging");
+  };
+  addEventListener("pointerup", endScrollDrag);
+  addEventListener("pointercancel", endScrollDrag);
+  addEventListener("blur", endScrollDrag);
+  addEventListener("wheel", () => (glide = null), { passive: true });
+  addEventListener("keydown", () => (glide = null));
+  function stepGlide(now) {
+    if (!glide) return;
+    const dt = Math.min(50, now - glide.t);
+    glide.t = now;
+    const before = scrollY;
+    scrollBy(0, glide.v * dt);
+    glide.v *= Math.exp(-dt / 260);
+    if (Math.abs(glide.v) < 0.03 || scrollY === before) glide = null; // slowed down, or reached either end
+  }
+
   // drag to turn the finished work
   let drag = null;
   canvas.addEventListener("pointerdown", (e) => {
@@ -806,13 +893,17 @@ const FONT_SETS = {
     drag = { x: e.clientX, y: e.clientY, th: view.dTh, phi: view.dPhi };
     view.preset = null;
     canvas.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!drag) return;
     view.dTh = drag.th - ((e.clientX - drag.x) / innerWidth) * 3.2;
     if (e.pointerType === "mouse") view.dPhi = clamp(drag.phi - ((e.clientY - drag.y) / innerHeight) * 1.6, -0.7, 0.6);
   });
-  const endDrag = () => (drag = null);
+  const endDrag = () => {
+    drag = null;
+    document.body.classList.remove("dragging");
+  };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
   canvas.addEventListener("wheel", (e) => {
@@ -822,17 +913,21 @@ const FONT_SETS = {
   }, { passive: false });
 
   // hover: a specimen tag
-  const hover = { x: 0, y: 0, dirty: false };
+  const hover = { x: 0, y: 0, dirty: false, t: 0 };
   const raycaster = new THREE.Raycaster();
+  const hoverNdc = new THREE.Vector2();
   const tag = $("#specimen");
-  function updateHover(s) {
-    if (!hover.dirty || drag) return;
+  function updateHover(s, now) {
+    if (!hover.dirty || drag || scrollDrag || now - hover.t < 50) return;
     hover.dirty = false;
+    hover.t = now;
     let id = -1;
     if (s > 60 && s < 915) {
-      shells.boundingSphere = null; // instances move every frame
-      raycaster.setFromCamera(new THREE.Vector2((hover.x / innerWidth) * 2 - 1, -(hover.y / innerHeight) * 2 + 1), camera);
-      const hit = raycaster.intersectObject(shells, false)[0];
+      // picked against the flat shadow quads (2 triangles each), which share the shells' matrices,
+      // rather than the 44 × 44 relief meshes; instances move every frame, so the bounds are recomputed
+      shadows.boundingSphere = null;
+      raycaster.setFromCamera(hoverNdc.set((hover.x / innerWidth) * 2 - 1, -(hover.y / innerHeight) * 2 + 1), camera);
+      const hit = raycaster.intersectObject(shadows, false)[0];
       if (hit && stateArr[hit.instanceId * 4] > 0.5) id = hit.instanceId;
     }
     if (id < 0) return tag.classList.remove("on");
@@ -1037,11 +1132,7 @@ const FONT_SETS = {
     if (terrain.visible && Math.abs(gridMix - gridMixDrawn) > 1e-4) {
       rtShells.instanceMatrix.needsUpdate = true;
       rtShellState.needsUpdate = true;
-      renderer.setRenderTarget(heightRT);
-      renderer.setClearColor(0x000000, 0);
-      renderer.clear();
-      renderer.render(rtScene, rtCam);
-      renderer.setRenderTarget(null);
+      drawHeight();
       renderer.setClearColor(groundCol, 1);
       gridMixDrawn = gridMix;
     }
@@ -1074,7 +1165,7 @@ const FONT_SETS = {
       el.classList.toggle("on", labelsOn);
     });
     updateCopy(s);
-    updateHover(s);
+    updateHover(s, now);
 
     renderer.render(scene, camera);
     if (captureNext) {
@@ -1085,8 +1176,26 @@ const FONT_SETS = {
       a.click();
     }
   }
+  // if frames run slow for about a second, draw at a lower resolution; one-off hitches (a tab switch, a GC) are ignored
+  const perf = { sum: 0, n: 0, prev: 0 };
+  function adaptResolution(now) {
+    const dt = now - perf.prev;
+    perf.prev = now;
+    if (dt <= 0 || dt > 120 || document.hidden) return;
+    perf.sum += dt; perf.n++;
+    if (perf.n < 45) return;
+    const avg = perf.sum / perf.n;
+    perf.sum = 0; perf.n = 0;
+    if (avg > 24 && pixelRatio > PR_MIN) {
+      pixelRatio = Math.max(PR_MIN, pixelRatio * 0.8);
+      renderer.setPixelRatio(pixelRatio);
+      renderer.setSize(innerWidth, innerHeight, false);
+    }
+  }
   function frame(now) {
+    stepGlide(now);
     update(now);
+    adaptResolution(now);
     requestAnimationFrame(frame);
   }
 
@@ -1100,11 +1209,30 @@ const FONT_SETS = {
   }
   addEventListener("resize", resize);
 
-  Promise.all([loadTex(D.rgbAtlas), loadTex(D.depthAtlas), loadTex(D.reconAtlas)]).then(([rgb, dep, rec]) => {
+  // compile every shader and draw everything once behind the loading veil, so no chapter stalls the first time it appears
+  // (the finished relief's shader is large; compiled on first sight it froze the page on slower machines)
+  async function warmUp() {
+    const hidden = [terrain, scan, shells, shadows].filter((o) => !o.visible);
+    hidden.forEach((o) => (o.visible = true));
+    placeCamera(0, 0, 0);
+    try {
+      if (renderer.compileAsync) {
+        await renderer.compileAsync(rtScene, rtCam);
+        await renderer.compileAsync(blurScene, blurCam);
+        await renderer.compileAsync(scene, camera);
+      }
+    } catch (e) { /* fall back to compiling on first draw */ }
+    drawHeight(); // also uploads the textures
+    renderer.render(scene, camera);
+    hidden.forEach((o) => (o.visible = false));
+  }
+
+  Promise.all([loadTex(D.rgbAtlas), loadTex(D.depthAtlas), loadTex(D.reconAtlas)]).then(async ([rgb, dep, rec]) => {
     shellU.uRgb.value = rgb;
     shellU.uDepth.value = dep;
     shellU.uRecon.value = rec;
     resize();
+    await warmUp();
     // deep links: ?chapter=3, or the finished work, e.g. ?finish=nacre&layout=grid
     const q = new URLSearchParams(location.search);
     const fq = FINISHES.findIndex((f) => f.name.toLowerCase() === (q.get("finish") || "").toLowerCase());
@@ -1119,6 +1247,7 @@ const FONT_SETS = {
     sNow = sTarget;
     requestAnimationFrame((t) => {
       last = t;
+      perf.prev = t;
       frame(t);
       document.body.classList.add("ready");
     });
