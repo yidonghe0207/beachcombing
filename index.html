@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Beachcombing</title>
+  <meta name="description" content="An online artwork: three hundred shells gathered from an image archive, studied by an autoencoder, laid out by t-SNE and finished as an archipelago in relief.">
+  <meta name="theme-color" content="#0d0c0a">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/gapsans-webfont.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="theme-dark">
+  <canvas id="stage" aria-label="Interactive 3D artwork: a digital shore of shells"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <a class="wordmark sc" href="#shore">Beachcombing</a>
+    <div class="tally" aria-live="polite"><span class="sc">Specimens</span> <b id="tally">000</b><span class="of"> / 300</span></div>
+    <button id="notes-open" class="link-btn">Field Notes</button>
+  </header>
+
+  <!-- the tide gauge: one notch per chapter -->
+  <nav class="gauge" aria-label="Chapters">
+    <a href="#shore" data-ch="0"><i></i><span>Shore</span></a>
+    <a href="#gathering" data-ch="1"><i></i><span>I · Gathering</span></a>
+    <a href="#drying" data-ch="2"><i></i><span>II · Drying</span></a>
+    <a href="#learning" data-ch="3"><i></i><span>III · Learning</span></a>
+    <a href="#sorting" data-ch="4"><i></i><span>IV · Sorting</span></a>
+    <a href="#laying" data-ch="5"><i></i><span>V · Laying</span></a>
+    <a href="#finishing" data-ch="6"><i></i><span>VI · Finishing</span></a>
+    <b class="gauge-fill" id="gauge-fill"></b>
+  </nav>
+
+  <!-- scroll track; the anchors only give the page its length and its chapter targets -->
+  <main id="track">
+    <section id="shore" style="top:0"></section>
+    <section id="gathering" style="top:110vh"></section>
+    <section id="drying" style="top:250vh"></section>
+    <section id="learning" style="top:400vh"></section>
+    <section id="sorting" style="top:560vh"></section>
+    <section id="laying" style="top:730vh"></section>
+    <section id="finishing" style="top:900vh"></section>
+  </main>
+
+  <div class="hero chapter-copy" data-ch="0">
+    <p class="kicker">An online artwork in six movements</p>
+    <h1>Beachcombing</h1>
+    <p class="lede">When the tide goes out, what does it leave behind?</p>
+    <p class="scroll-cue"><span>Follow the tide</span><i></i></p>
+  </div>
+
+  <article class="chapter-copy" data-ch="1">
+    <p class="numeral">I.</p>
+    <h2>Gathering</h2>
+    <p>Combing an archive is a kind of beachcombing. From a public collection of shell photographs (134 species), the search keeps <em>three hundred</em>: sixty kinds, five specimens each, chips and scars included.</p>
+    <p class="fine">Not all of them are from the sea; some are land and river snails.</p>
+  </article>
+
+  <article class="chapter-copy" data-ch="2">
+    <p class="numeral">II.</p>
+    <h2>Drying</h2>
+    <p>Laid out in the sun, colour fades and form remains. Each photograph is turned into a <em>depth map</em>. Pale means near, dark means far. The shell is now measured in light and shadow.</p>
+    <p class="fine">Depth Anything V2 Small · 320 × 320 · backgrounds cleaned for relief</p>
+  </article>
+
+  <article class="chapter-copy" data-ch="3">
+    <p class="numeral">III.</p>
+    <h2>Learning</h2>
+    <p>An autoencoder squeezes each relief into <em>sixty-four numbers</em>, then tries to rebuild it from those numbers alone.</p>
+    <div class="codec" aria-label="Autoencoder: 128 by 128 depth image to 64 numbers and back">
+      <span>128²</span><i class="wedge in"></i><span class="z">64</span><i class="wedge out"></i><span>128²</span>
+    </div>
+    <p><span id="n-train">240</span> shells teach it; the <span class="held">60 in red</span> are held back to test it. Past the line, each shell is shown as rebuilt: softer, keeping the form but not the chips.</p>
+    <figure class="curve">
+      <svg id="loss" viewBox="0 0 320 112" role="img" aria-label="Training and held-out error over 80 rounds"></svg>
+      <figcaption><span id="n-epochs">80</span> rounds of training · held-out error down <b id="reduction">94.5%</b></figcaption>
+    </figure>
+    <p class="fine">CNN · 128 × 128 input · 1.33 M parameters · best model at round <span id="n-best">71</span></p>
+  </article>
+
+  <article class="chapter-copy" data-ch="4">
+    <p class="numeral">IV.</p>
+    <h2>Sorting</h2>
+    <p>Shells whose sixty-four numbers are alike are put together. k-means makes <em>six piles</em>, sorted by form and not by name. The shell at the heart of each pile is the one closest to its centre.</p>
+    <p class="fine">k-means, k = 6, on the standardised codes</p>
+  </article>
+
+  <article class="chapter-copy" data-ch="5">
+    <p class="numeral">V.</p>
+    <h2>Laying</h2>
+    <p>t-SNE unfolds those sixty-four dimensions onto a map, so shells that sit near each other in the code also sit near each other here. Depth becomes height: up to <em>18 mm</em> for each shell.</p>
+    <div class="layout-switch" role="group" aria-label="Arrangement">
+      <button data-layout="free" aria-pressed="true">Free</button><button data-layout="grid" aria-pressed="false">Grid</button>
+    </div>
+    <p class="fine" id="layout-note">Free: an archipelago at the original t-SNE positions. Where shells overlap, their heights add.</p>
+  </article>
+
+  <article class="chapter-copy finish-copy" data-ch="6">
+    <p class="numeral">VI.</p>
+    <h2>Finishing</h2>
+    <p class="finish-name" id="finish-name">Contour</p>
+    <p id="finish-text">Read as a chart of islands: a line for every 2 mm of rise, and a heavier one every 10 mm.</p>
+  </article>
+
+  <div class="pile-labels" id="pile-labels" aria-hidden="true"></div>
+
+  <div class="specimen" id="specimen" aria-hidden="true">
+    <span class="sc">No.</span> <b id="sp-no">001</b>
+    <em id="sp-name">Aandara consociata</em>
+    <span id="sp-group">Group III · Rounds</span>
+  </div>
+
+  <div class="bench" id="bench" inert>
+    <div class="bench-row">
+      <div class="layout-switch" role="group" aria-label="Arrangement">
+        <button data-layout="free" aria-pressed="true">Free</button><button data-layout="grid" aria-pressed="false">Grid</button>
+      </div>
+      <div class="views">
+        <button class="link-btn" data-view="raking">Raking</button>
+        <button class="link-btn" data-view="top">Top</button>
+        <button class="link-btn" id="save">Save image</button>
+      </div>
+    </div>
+    <div class="finishes" role="group" aria-label="Surface finish">
+      <button data-finish="0" aria-pressed="true"><i class="sw contour"></i>Contour</button>
+      <button data-finish="1"><i class="sw line"></i>Line</button>
+      <button data-finish="2"><i class="sw cast"></i>Plaster</button>
+      <button data-finish="3"><i class="sw fossil"></i>Fossil</button>
+      <button data-finish="4"><i class="sw nacre"></i>Nacre</button>
+      <button data-finish="5"><i class="sw rubbing"></i>Rubbing</button>
+    </div>
+    <p class="hint">Drag to turn the work · scroll up to walk back along the shore</p>
+  </div>
+
+  <button id="tide" class="link-btn tide-btn" aria-pressed="false">Still the tide</button>
+
+  <dialog id="notes">
+    <button class="close" id="notes-close" aria-label="Close">×</button>
+    <p class="kicker">Beachcombing</p>
+    <h2>Field Notes</h2>
+    <p>This is a small piece about digital craft. An AI search stands in for walking the shore. An autoencoder studies the catch, a projection lays it out, and a few material studies finish the surface. Each step stands for a hand-skill, but it is done by computing.</p>
+    <dl>
+      <dt>Collection</dt>
+      <dd>300 photographs (60 kinds × 5 specimens) from <a href="https://springernature.figshare.com/articles/dataset/134_shell_species_images/9122627" target="_blank" rel="noopener">134 Shell Species Images</a>, CC0. Species names follow the source data.</dd>
+      <dt>Depth</dt>
+      <dd>Depth Anything V2 Small on 320 × 320 crops. This is relative depth from one photograph, not a scan. Backgrounds were cleaned with masks before building the relief.</dd>
+      <dt>Autoencoder</dt>
+      <dd>CNN, 128 × 128 input, 64-dimensional code, 1.33 M parameters. 240 training and 60 held-out images, 80 epochs (about 4½ minutes on a CPU), best held-out model at epoch 71. Held-out error fell from 0.069 to 0.0038 (mean squared error), 94.5% lower. The rebuilt shells appear in chapter III only; the relief always uses the original depth.</dd>
+      <dt>Sorting</dt>
+      <dd>k-means (k = 6) on the standardised codes. The six groups are learned visual similarities, not taxonomy.</dd>
+      <dt>Layout</dt>
+      <dd>t-SNE (perplexity 30, trustworthiness <span id="trust">0.96</span> at k = 10). <b>Free</b>: original positions within a 2100 mm field, 97 mm per shell, z = Σ 18·depth (mm), shown as islands in a sea; the Rhino model adds a 6 mm base. <b>Grid</b>: 18 × 18 tiles at 100 mm, each with a 6 mm base, assigned by linear sum assignment; 300 tiles and 24 empty cells. On screen, relief is drawn at 2× for legibility.</dd>
+      <dt>Finishes</dt>
+      <dd>Six real-time shaders on the same height field: contours, line drawing, plaster cast, fossil, nacre and ink rubbing. They are material studies, not simulations of fabrication.</dd>
+    </dl>
+    <p class="fine">Yidong He · Quantitative Aesthetics, Assignment 4 · 2026<br>Built with three.js (MIT) · Set in <a href="https://github.com/Interstices-/GapSans" target="_blank" rel="noopener">Gap Sans</a> by Interstices (SIL OFL 1.1)</p>
+  </dialog>
+
+  <div id="veil"><p class="sc">Beachcombing</p><p class="veil-sub">the tide is coming in…</p></div>
+  <noscript><p class="nojs">This artwork needs JavaScript and WebGL.</p></noscript>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
