@@ -120,6 +120,7 @@
       <div class="views">
         <button class="link-btn" data-view="raking">Raking</button>
         <button class="link-btn" data-view="top">Top</button>
+        <button class="link-btn" id="isle-names" aria-pressed="true">Names</button>
         <button class="link-btn" id="save">Save image</button>
       </div>
     </div>
@@ -149,7 +150,7 @@
       <dt>Autoencoder</dt>
       <dd>CNN, 128 × 128 input, 64-dimensional code, 1.33 M parameters. 240 training and 60 held-out images, 80 epochs (about 4½ minutes on a CPU), best held-out model at epoch 71. Held-out error fell from 0.069 to 0.0038 (mean squared error), 94.5% lower. The rebuilt shells appear in chapter III only; the relief always uses the original depth.</dd>
       <dt>Sorting</dt>
-      <dd>k-means (k = 6) on the standardised codes. The six groups are learned visual similarities, not taxonomy.</dd>
+      <dd>k-means (k = 6) on the standardised codes. The six groups are learned visual similarities, not taxonomy. In the finished work each group's largest island carries a chart name; the names are invented, the groups and their sizes are not.</dd>
       <dt>Layout</dt>
       <dd>t-SNE (perplexity 30, trustworthiness <span id="trust">0.96</span> at k = 10). <b>Free</b>: original positions within a 2100 mm field, 97 mm per shell, z = Σ 18·depth (mm), shown as islands in a sea; the Rhino model adds a 6 mm base. <b>Grid</b>: 18 × 18 tiles at 100 mm, each with a 6 mm base, assigned by linear sum assignment; 300 tiles and 24 empty cells. On screen, relief is drawn at 2× for legibility.</dd>
       <dt>Finishes</dt>

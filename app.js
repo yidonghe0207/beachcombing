@@ -645,6 +645,143 @@ const FONT_SETS = {
   scanLabel.innerHTML = `<b>64</b><small>numbers</small>`;
   labelBox.appendChild(scanLabel);
 
+  // the archipelago's names, shown at the bench. Each group's largest island (shells within 1.3 units of one
+  // another) carries its name, anchored on the member nearest the island's centre so the pin lands on land;
+  // in the grid the same is done with neighbouring tiles. A second island of 15 or more gets a minor name.
+  const ISLES = [
+    { name: "The Spire Marches", text: "Tall, narrow towers wound whorl on whorl, all leaning the same way." },
+    { name: "Isle of Ovalness", text: "Smooth, egg-round backs: cowries and cones, and even spined conchs read as ovals here." },
+    { name: "The Round Realm", text: "Fans and hearts ribbed from hinge to rim: the scallops, cockles and clams.", minor: "The Far Rounds" },
+    { name: "The Low Country", text: "Broad and barely raised: abalone, limpet and drupe pressed close to the ground." },
+    { name: "The Gaping Coast", text: "Shells seen mouth-first, their wide openings turned up to the sky." },
+    { name: "The Coiled Holds", text: "Snails wound tight as sundials, each spiral turning back on itself." },
+  ];
+  function islands(members, key, reach) {
+    const pos = (sh) => (key === "free" ? [sh.fx, sh.fz] : [sh.gx, sh.gz]);
+    const left = new Set(members), out = [];
+    while (left.size) {
+      const first = left.values().next().value, isle = [first], stack = [first];
+      left.delete(first);
+      while (stack.length) {
+        const [ax, az] = pos(stack.pop());
+        for (const o of [...left]) {
+          const [bx, bz] = pos(o);
+          if (Math.hypot(ax - bx, az - bz) < reach) { left.delete(o); isle.push(o); stack.push(o); }
+        }
+      }
+      out.push(isle);
+    }
+    out.sort((a, b) => b.length - a.length);
+    return out.map((isle) => {
+      const cx = isle.reduce((t, sh) => t + pos(sh)[0], 0) / isle.length, cz = isle.reduce((t, sh) => t + pos(sh)[1], 0) / isle.length;
+      const mid = isle.reduce((m, sh) => (Math.hypot(pos(sh)[0] - cx, pos(sh)[1] - cz) < Math.hypot(pos(m)[0] - cx, pos(m)[1] - cz) ? sh : m));
+      return { size: isle.length, at: pos(mid) };
+    });
+  }
+  const isles = [];
+  ISLES.forEach((d, k) => {
+    const members = shell.filter((sh) => sh.s.cluster === k + 1);
+    const free = islands(members, "free", 1.3), grid = islands(members, "grid", 1.05);
+    const make = (cls, html) => {
+      const el = document.createElement("div");
+      el.className = cls;
+      el.innerHTML = html;
+      el.addEventListener("click", () => {
+        const open = !el.classList.contains("open");
+        isles.forEach((o) => o.el.classList.remove("open"));
+        el.classList.toggle("open", open);
+      });
+      labelBox.appendChild(el);
+      return el;
+    };
+    isles.push({
+      el: make("isle", `<b>${ROMAN[k]}</b><span>${d.name}</span><em>${d.text}<small>${members.length} shells</small></em>`),
+      free: free[0].at, grid: grid[0].at, freeOnly: false,
+    });
+    if (d.minor && free[1] && free[1].size >= 15)
+      isles.push({
+        el: make("isle minor", `<span>${d.minor}</span><em>A second shore of the same: ${free[1].size} shells that settled apart.</em>`),
+        free: free[1].at, grid: null, freeOnly: true,
+      });
+  });
+  const SVG = "http://www.w3.org/2000/svg";
+  const leaderSvg = document.createElementNS(SVG, "svg");
+  leaderSvg.setAttribute("class", "isles-leaders");
+  labelBox.prepend(leaderSvg);
+  for (const isle of isles) {
+    isle.line = leaderSvg.appendChild(document.createElementNS(SVG, "line"));
+    isle.pin = leaderSvg.appendChild(document.createElementNS(SVG, "circle"));
+    isle.pin.setAttribute("r", "3");
+  }
+  let namesOn = true, keepOut = [], keepOutAt = 0;
+  const hit = (a, b, pad = 0) => a.l < b.r + pad && a.r + pad > b.l && a.t < b.b + pad && a.b + pad > b.t;
+  // place every name above its island, step it around the copy, the controls and the masthead,
+  // push apart any names that overlap, then draw a line from each name down to its island
+  function updateIsles(show) {
+    const placed = [];
+    for (const isle of isles) {
+      const on = show && (isle.freeOnly ? gridMix < 0.5 : true);
+      isle.el.classList.toggle("on", on);
+      isle.line.style.display = isle.pin.style.display = "none";
+      if (!on) { isle.el.classList.remove("open"); continue; }
+      const [fx, fz] = isle.free, [gx, gz] = isle.grid || isle.free;
+      proj.set(lerp(fx, gx, gridMix), 0.3, lerp(fz, gz, gridMix)).project(camera);
+      if (proj.z > 1) { isle.el.classList.remove("on"); continue; }
+      isle.ax = ((proj.x + 1) / 2) * innerWidth;
+      isle.ay = ((1 - proj.y) / 2) * innerHeight;
+      if (!isle.w) { isle.w = isle.el.offsetWidth; isle.h = isle.el.offsetHeight; } // the names never change size
+      isle.left = clamp(isle.ax - isle.w / 2, 8, innerWidth - isle.w - 8); // always fully on screen
+      isle.top = isle.ay - 34 - isle.h;
+      placed.push(isle);
+    }
+    if (!placed.length) return;
+    // the areas names must not cover, measured twice a second rather than every frame
+    const now = performance.now();
+    if (!keepOutAt || now - keepOutAt > 500) {
+      const rectOf = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
+      keepOut = [rectOf($("#bench")), rectOf($(".masthead"))];
+      const copy = $(".finish-copy.on");
+      if (copy) keepOut.push(rectOf(copy.querySelector(".finish-name")), rectOf(copy.querySelector("h2")), rectOf($("#finish-text")));
+      keepOutAt = now;
+    }
+    const box = (o) => ({ l: o.left, r: o.left + o.w, t: o.top, b: o.top + o.h });
+    const PAD = 10;
+    for (const isle of placed) {
+      for (const k of keepOut) {
+        if (!hit(box(isle), k, PAD)) continue;
+        // the smallest step that clears it: right, left, above or below
+        const options = [
+          [k.r + PAD, isle.top], [k.l - isle.w - PAD, isle.top],
+          [isle.left, k.t - isle.h - PAD], [isle.left, k.b + PAD],
+        ].filter(([l, t]) => l >= 8 && l + isle.w <= innerWidth - 8 && t >= 8 && t + isle.h <= innerHeight - 8);
+        if (!options.length) continue;
+        options.sort((a, b) => Math.hypot(a[0] - isle.left, a[1] - isle.top) - Math.hypot(b[0] - isle.left, b[1] - isle.top));
+        [isle.left, isle.top] = options[0];
+      }
+    }
+    // names that overlap one another: the higher one moves up, unless that would run into the masthead
+    for (let pass = 0; pass < 10; pass++) {
+      let moved = false;
+      for (const a of placed) for (const b of placed) {
+        if (a === b || !hit(box(a), box(b), 6)) continue;
+        const [hi, lo] = a.top <= b.top ? [a, b] : [b, a];
+        const shift = hi.top + hi.h + 6 - lo.top;
+        if (hi.top - shift > keepOut[1].b + 6) hi.top -= shift; else lo.top += shift;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    for (const isle of placed) {
+      isle.el.style.transform = `translate(${isle.left.toFixed(1)}px, ${isle.top.toFixed(1)}px)`;
+      // the line leaves the name from the nearest point of its lower or upper edge
+      const below = isle.ay > isle.top + isle.h / 2;
+      const sx = clamp(isle.ax, isle.left + 12, isle.left + isle.w - 12), sy = below ? isle.top + isle.h : isle.top;
+      const set = (el, attrs) => { for (const k in attrs) el.setAttribute(k, attrs[k].toFixed(1)); el.style.display = ""; };
+      set(isle.line, { x1: sx, y1: sy, x2: isle.ax, y2: isle.ay });
+      set(isle.pin, { cx: isle.ax, cy: isle.ay });
+    }
+  }
+
   // ───────────────────────── the tide (waves deposit shells)
   const L0_HERO = -4.6;
   const tide = { t: 0, start: 0, period: 6.2, reach: 0, l0: L0_HERO, from: L0_HERO, wet: L0_HERO, batch: [], ph: [0, 0, 0], waves: 0, paused: false };
@@ -810,6 +947,10 @@ const FONT_SETS = {
     e.currentTarget.textContent = tide.paused ? "Let the tide run" : "Still the tide";
   });
   const notes = $("#notes");
+  $("#isle-names").addEventListener("click", (e) => {
+    namesOn = !namesOn;
+    e.currentTarget.setAttribute("aria-pressed", String(namesOn));
+  });
   $("#notes-open").addEventListener("click", () => notes.showModal());
   $("#notes-close").addEventListener("click", () => notes.close());
   notes.addEventListener("click", (e) => { if (e.target === notes) notes.close(); });
@@ -1164,6 +1305,7 @@ const FONT_SETS = {
       el.style.top = ((1 - proj.y) / 2) * innerHeight + "px";
       el.classList.toggle("on", labelsOn);
     });
+    updateIsles(benchOn && namesOn);
     updateCopy(s);
     updateHover(s, now);
 
@@ -1205,6 +1347,8 @@ const FONT_SETS = {
     camera.aspect = w / Math.max(1, h);
     camera.updateProjectionMatrix();
     layoutPiles(camera.aspect);
+    isles.forEach((isle) => (isle.w = 0)); // the names are smaller on a phone
+    keepOutAt = 0;
     sTarget = scrollY / vhPx();
   }
   addEventListener("resize", resize);
