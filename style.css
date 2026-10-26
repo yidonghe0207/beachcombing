@@ -208,7 +208,7 @@ body.theme-paper .layout-switch button[aria-pressed="true"] { color: var(--paper
 .isles-leaders { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .isles-leaders line { stroke: var(--fg); stroke-width: 1; opacity: .5; }
 .isles-leaders circle { fill: none; stroke: var(--fg); stroke-width: 1; opacity: .8; }
-#isle-names[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+#isle-names[aria-pressed="false"] { opacity: .6; }
 
 /* specimen tag on hover, like a museum label tied with string */
 .specimen {

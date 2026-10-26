@@ -713,10 +713,44 @@ const FONT_SETS = {
     isle.pin = leaderSvg.appendChild(document.createElementNS(SVG, "circle"));
     isle.pin.setAttribute("r", "3");
   }
-  let namesOn = true, keepOut = [], keepOutAt = 0;
+  let namesOn = false, keepOut = [], keepOutAt = 0; // off until the visitor asks for them
   const hit = (a, b, pad = 0) => a.l < b.r + pad && a.r + pad > b.l && a.t < b.b + pad && a.b + pad > b.t;
-  // place every name above its island, step it around the copy, the controls and the masthead,
-  // push apart any names that overlap, then draw a line from each name down to its island
+  // each name looks for open water near its island: the screen is mapped in 16 px cells marked where shells lie,
+  // spots on rings around the island are scored by the shell they would cover, their distance, and any clash with
+  // the copy, the controls or a name already placed; the best spot wins, and a name only moves when a spot is
+  // clearly better, so names do not jump while the work turns. A line leads from each name back to its island.
+  const CELL = 16;
+  let occ = new Uint8Array(0), occW = 0, occH = 0;
+  function mapShells() {
+    occW = Math.ceil(innerWidth / CELL);
+    occH = Math.ceil(innerHeight / CELL);
+    if (occ.length !== occW * occH) occ = new Uint8Array(occW * occH);
+    else occ.fill(0);
+    proj.set(0, 0.2, 0).project(camera);
+    const ox = proj.x, oy = proj.y;
+    proj.set(0.55, 0.2, 0).project(camera);
+    const r = Math.max(6, Math.hypot((proj.x - ox) * innerWidth, (proj.y - oy) * innerHeight) / 2); // a shell's radius on screen
+    const rc = Math.ceil(r / CELL);
+    for (const sh of shell) {
+      proj.set(sh.fx, 0.2, sh.fz).project(camera);
+      const px = ((proj.x + 1) / 2) * innerWidth, py = ((1 - proj.y) / 2) * innerHeight;
+      const ci = Math.floor(px / CELL), cj = Math.floor(py / CELL);
+      for (let j = cj - rc; j <= cj + rc; j++) {
+        if (j < 0 || j >= occH) continue;
+        for (let i = ci - rc; i <= ci + rc; i++) {
+          if (i < 0 || i >= occW) continue;
+          if (Math.hypot((i + 0.5) * CELL - px, (j + 0.5) * CELL - py) <= r + CELL * 0.5) occ[j * occW + i] = 1;
+        }
+      }
+    }
+  }
+  function shellUnder(b) {
+    let n = 0;
+    for (let j = Math.max(0, Math.floor(b.t / CELL)); j <= Math.min(occH - 1, Math.floor(b.b / CELL)); j++)
+      for (let i = Math.max(0, Math.floor(b.l / CELL)); i <= Math.min(occW - 1, Math.floor(b.r / CELL)); i++) n += occ[j * occW + i];
+    return n;
+  }
+  const RINGS_WIDE = [0, 70, 130, 200, 280], RINGS_NARROW = [0, 40, 80, 130];
   function updateIsles(show) {
     const placed = [];
     for (const isle of isles) {
@@ -729,8 +763,6 @@ const FONT_SETS = {
       isle.ax = ((proj.x + 1) / 2) * innerWidth;
       isle.ay = ((1 - proj.y) / 2) * innerHeight;
       if (!isle.w) { isle.w = isle.el.offsetWidth; isle.h = isle.el.offsetHeight; } // the names never change size
-      isle.left = clamp(isle.ax - isle.w / 2, 8, innerWidth - isle.w - 8); // always fully on screen
-      isle.top = isle.ay - 34 - isle.h;
       placed.push(isle);
     }
     if (!placed.length) return;
@@ -738,43 +770,47 @@ const FONT_SETS = {
     const now = performance.now();
     if (!keepOutAt || now - keepOutAt > 500) {
       const rectOf = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
-      keepOut = [rectOf($("#bench")), rectOf($(".masthead"))];
+      keepOut = [rectOf($("#bench")), rectOf($(".masthead")), rectOf($(".gauge"))];
       const copy = $(".finish-copy.on");
       if (copy) keepOut.push(rectOf(copy.querySelector(".finish-name")), rectOf(copy.querySelector("h2")), rectOf($("#finish-text")));
       keepOutAt = now;
     }
-    const box = (o) => ({ l: o.left, r: o.left + o.w, t: o.top, b: o.top + o.h });
-    const PAD = 10;
+    mapShells();
+    const rings = innerWidth < 720 ? RINGS_NARROW : RINGS_WIDE;
+    const taken = [];
+    const score = (isle, l, t) => {
+      const b = { l, r: l + isle.w, t, b: t + isle.h };
+      if (l < 8 || t < 8 || b.r > innerWidth - 8 || b.b > innerHeight - 8) return Infinity;
+      let s = shellUnder(b) * 10 + Math.hypot(l + isle.w / 2 - isle.ax, t + isle.h / 2 - isle.ay) * 0.15;
+      for (const k of keepOut) if (hit(b, k, 10)) s += 1e4;
+      for (const k of taken) if (hit(b, k, 8)) s += 1e4;
+      return s;
+    };
     for (const isle of placed) {
-      for (const k of keepOut) {
-        if (!hit(box(isle), k, PAD)) continue;
-        // the smallest step that clears it: right, left, above or below
-        const options = [
-          [k.r + PAD, isle.top], [k.l - isle.w - PAD, isle.top],
-          [isle.left, k.t - isle.h - PAD], [isle.left, k.b + PAD],
-        ].filter(([l, t]) => l >= 8 && l + isle.w <= innerWidth - 8 && t >= 8 && t + isle.h <= innerHeight - 8);
-        if (!options.length) continue;
-        options.sort((a, b) => Math.hypot(a[0] - isle.left, a[1] - isle.top) - Math.hypot(b[0] - isle.left, b[1] - isle.top));
-        [isle.left, isle.top] = options[0];
+      let best = Infinity, bl = 0, bt = 0;
+      for (const d of rings) {
+        const steps = d ? 16 : 1;
+        for (let a = 0; a < steps; a++) {
+          const ang = (a / steps) * Math.PI * 2;
+          const l = isle.ax + Math.cos(ang) * d * 1.3 - isle.w / 2, t = isle.ay + Math.sin(ang) * d * 0.8 - isle.h / 2;
+          const s = score(isle, l, t);
+          if (s < best) { best = s; bl = l; bt = t; }
+        }
       }
-    }
-    // names that overlap one another: the higher one moves up, unless that would run into the masthead
-    for (let pass = 0; pass < 10; pass++) {
-      let moved = false;
-      for (const a of placed) for (const b of placed) {
-        if (a === b || !hit(box(a), box(b), 6)) continue;
-        const [hi, lo] = a.top <= b.top ? [a, b] : [b, a];
-        const shift = hi.top + hi.h + 6 - lo.top;
-        if (hi.top - shift > keepOut[1].b + 6) hi.top -= shift; else lo.top += shift;
-        moved = true;
+      // stay put unless the new spot is clearly better; the old spot follows the island as the work turns
+      if (isle.dx !== undefined) {
+        const kept = score(isle, isle.ax + isle.dx, isle.ay + isle.dy);
+        if (kept <= best * 1.25 + 4) { bl = isle.ax + isle.dx; bt = isle.ay + isle.dy; }
       }
-      if (!moved) break;
+      if (best === Infinity && isle.dx === undefined) { bl = clamp(isle.ax - isle.w / 2, 8, innerWidth - isle.w - 8); bt = clamp(isle.ay - isle.h - 30, 8, innerHeight - isle.h - 8); }
+      isle.left = bl; isle.top = bt;
+      isle.dx = bl - isle.ax; isle.dy = bt - isle.ay;
+      taken.push({ l: bl, r: bl + isle.w, t: bt, b: bt + isle.h });
     }
     for (const isle of placed) {
       isle.el.style.transform = `translate(${isle.left.toFixed(1)}px, ${isle.top.toFixed(1)}px)`;
-      // the line leaves the name from the nearest point of its lower or upper edge
-      const below = isle.ay > isle.top + isle.h / 2;
-      const sx = clamp(isle.ax, isle.left + 12, isle.left + isle.w - 12), sy = below ? isle.top + isle.h : isle.top;
+      // the line leaves the name from the point of its box nearest the island
+      const sx = clamp(isle.ax, isle.left + 6, isle.left + isle.w - 6), sy = clamp(isle.ay, isle.top + 2, isle.top + isle.h - 2);
       const set = (el, attrs) => { for (const k in attrs) el.setAttribute(k, attrs[k].toFixed(1)); el.style.display = ""; };
       set(isle.line, { x1: sx, y1: sy, x2: isle.ax, y2: isle.ay });
       set(isle.pin, { cx: isle.ax, cy: isle.ay });
@@ -1346,7 +1382,7 @@ const FONT_SETS = {
     camera.aspect = w / Math.max(1, h);
     camera.updateProjectionMatrix();
     layoutPiles(camera.aspect);
-    isles.forEach((isle) => (isle.w = 0)); // the names are smaller on a phone
+    isles.forEach((isle) => { isle.w = 0; isle.dx = isle.dy = undefined; }); // the names are smaller on a phone; place them afresh
     keepOutAt = 0;
     sTarget = scrollY / vhPx();
   }
