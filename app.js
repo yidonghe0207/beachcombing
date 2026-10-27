@@ -47,14 +47,14 @@ const FONT_SETS = {
   const canvas = $("#stage");
   let renderer;
   try {
-    // multisampling only on low-density screens: at 1.5x and above edges are fine without it, and it is costly
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: devicePixelRatio < 1.5, powerPreference: "high-performance" });
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   } catch (e) {
     $("#veil .veil-sub").textContent = "This artwork needs WebGL, which is unavailable in this browser.";
     return;
   }
-  // the pixel ratio starts at the screen's (up to 1.5) and steps down if frames run slow (see frame())
-  const PR_MAX = Math.min(devicePixelRatio, 1.5), PR_MIN = Math.min(PR_MAX, 0.75);
+  // the pixel ratio starts at the screen's (up to 1.75); it steps down only if frames are clearly slow and back up
+  // once they are fast again (see adaptResolution)
+  const PR_MAX = Math.min(devicePixelRatio, 1.75), PR_MIN = Math.min(PR_MAX, 0.75);
   let pixelRatio = PR_MAX;
   renderer.setPixelRatio(pixelRatio);
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // shaders write display colours directly
@@ -1414,37 +1414,53 @@ const FONT_SETS = {
       a.click();
     }
   }
-  // if frames run slow for about a second, draw at a lower resolution; one-off hitches (a tab switch, a GC) are ignored
-  const perf = { sum: 0, n: 0, prev: 0 };
+  // the resolution follows how the machine copes, both ways. Frames are averaged in windows of 40 (about 2/3 s):
+  // clearly slow (under ~38 fps) steps the resolution down; four fast windows in a row (60 fps) step it back up.
+  // If a step up is followed at once by a step down, it stops trying to go up for half a minute, so it never flickers.
+  // Nothing is measured in the first 3 s, while textures and shaders settle, and one-off hitches are ignored.
+  const perf = { sum: 0, n: 0, prev: 0, start: 0, fast: 0, upAt: -1e9, holdUntil: 0 };
+  function setPixelRatio(r) {
+    pixelRatio = r;
+    renderer.setPixelRatio(r);
+    renderer.setSize(innerWidth, innerHeight, false);
+  }
   function adaptResolution(now) {
     const dt = now - perf.prev;
     perf.prev = now;
-    if (dt <= 0 || dt > 120 || document.hidden) return;
+    if (!perf.start) perf.start = now;
+    if (dt <= 0 || dt > 400 || document.hidden || now - perf.start < 3000) return; // >400 ms: a tab switch, not slowness
     perf.sum += dt; perf.n++;
-    if (perf.n < 20) return;
+    if (perf.n < 40 && perf.sum < 1000) return; // a window is 40 frames, or one second on a slow machine
     const avg = perf.sum / perf.n;
     perf.sum = 0; perf.n = 0;
-    if (avg > 22 && pixelRatio > PR_MIN) {
-      pixelRatio = Math.max(PR_MIN, pixelRatio * (avg > 40 ? 0.7 : 0.82)); // a bigger step when far too slow
-      renderer.setPixelRatio(pixelRatio);
-      renderer.setSize(innerWidth, innerHeight, false);
+    if (avg > 26 && pixelRatio > PR_MIN) {
+      if (now - perf.upAt < 4000) perf.holdUntil = now + 30000; // that step up was too much
+      perf.fast = 0;
+      setPixelRatio(Math.max(PR_MIN, pixelRatio * (avg > 45 ? 0.72 : 0.85)));
+    } else if (avg < 18.5 && pixelRatio < PR_MAX && now > perf.holdUntil) {
+      if (++perf.fast >= 4) {
+        perf.fast = 0;
+        perf.upAt = now;
+        setPixelRatio(Math.min(PR_MAX, pixelRatio / 0.85));
+      }
+    } else {
+      perf.fast = 0;
     }
   }
   // while nothing is being done (no scroll easing, drag, scrub, wipe or layout switch, and no input for a second)
   // the scene is drawn every other frame: the tide and the light still move smoothly at 30 fps, at half the GPU work.
-  // The resolution check only measures frames drawn at full rate, so the halving is not mistaken for slowness.
+  // The resolution check times every animation frame, drawn or skipped: on a machine that keeps up they all come at the
+  // display's rate, so the halving is not mistaken for slowness, while a slow draw still lengthens the frame after it.
   let lastInput = 0, skipNext = false;
   for (const ev of ["pointermove", "pointerdown", "wheel", "keydown", "touchstart"]) addEventListener(ev, () => (lastInput = performance.now()), { passive: true });
   function frame(now) {
     const idle = sNow === sTarget && !drag && !scrollDrag && !glide && scrub === null && !wipeAnim &&
       Math.abs(gridMix - gridTarget) < 1e-3 && now - lastInput > 1000;
-    if (idle && skipNext) {
-      perf.prev = now;
-    } else {
+    if (!(idle && skipNext)) {
       stepGlide(now);
       update(now);
-      if (idle) perf.prev = now; else adaptResolution(now);
     }
+    adaptResolution(now);
     skipNext = idle && !skipNext;
     requestAnimationFrame(frame);
   }
