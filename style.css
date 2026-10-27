@@ -102,7 +102,7 @@ body.theme-paper .vignette { opacity: .35; }
 /* ——— tide gauge ——— */
 .gauge {
   position: fixed; z-index: 10; right: 30px; top: 50%; transform: translateY(-50%);
-  display: flex; flex-direction: column; gap: 24px; padding-right: 0;
+  display: flex; flex-direction: column; gap: 24px; padding-right: 18px; /* clear of the line, where the scrub knob runs */
 }
 .gauge::before { content: ""; position: absolute; right: 3px; top: 4px; bottom: 4px; width: 1px; background: var(--rule); }
 /* the fill and the knob move by transform only (set from app.js), so scrolling never re-lays out the page */
@@ -322,3 +322,55 @@ body.ready #veil { opacity: 0; visibility: hidden; }
   .grain { animation: none; }
   .scroll-cue i { animation: none; }
 }
+
+/* ——— 中文 ———
+   Titles and labels in Fusion Pixel (缝合像素), text in Glow Sans (未来荧黑); Latin letters and figures stay in
+   Gap Sans, which comes first in every stack. Both Chinese fonts are subset to the site's own characters
+   (_build/subset_zh.py) and are only downloaded once Chinese is shown. The pixel font is drawn at whole
+   multiples of its 12 px grid so it stays crisp. */
+@font-face { font-family: "Fusion Pixel ZH"; src: url("fonts/fusion-pixel-zh.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Glow Sans ZH"; src: url("fonts/glow-sans-zh-light.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Glow Sans ZH"; src: url("fonts/glow-sans-zh-regular.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+
+.mast-links { display: flex; align-items: baseline; gap: 1.4rem; }
+.lang-btn { font-family: "Gap Sans", "Fusion Pixel ZH", system-ui, sans-serif; font-style: normal; font-size: 12px; letter-spacing: .14em; }
+body.lang-zh .lang-btn { font-size: 13px; letter-spacing: .08em; }
+
+body.lang-zh {
+  --display: "Gap Sans", "Fusion Pixel ZH", system-ui, sans-serif;
+  --smallcaps: "Gap Sans", "Fusion Pixel ZH", system-ui, sans-serif;
+  --text: "Gap Sans", "Glow Sans ZH", system-ui, sans-serif;
+}
+body.lang-zh em, body.lang-zh .lede, body.lang-zh .link-btn, body.lang-zh .fine, body.lang-zh .hint, body.lang-zh #finish-text { font-style: normal; }
+body.lang-zh .chapter-copy p, body.lang-zh #notes p, body.lang-zh #notes dd { line-height: 1.85; letter-spacing: .02em; text-wrap: pretty; /* no lone character on the last line */ }
+body.lang-zh .fine { line-height: 1.7; }
+
+/* pixel titles on the 12 px grid */
+body.lang-zh .hero h1 { font-size: 144px; line-height: 1; letter-spacing: .06em; }
+body.lang-zh .chapter-copy h2, body.lang-zh #notes h2 { font-size: 48px; line-height: 1.1; letter-spacing: .04em; }
+body.lang-zh .finish-name { font-size: 36px; letter-spacing: .04em; }
+body.lang-zh .pile-label span { font-size: 24px; letter-spacing: .06em; }
+body.lang-zh .wordmark.sc { font-size: 24px; letter-spacing: .12em; }
+body.lang-zh #veil .sc { font-size: 24px; letter-spacing: .3em; }
+body.lang-zh .lede { font-size: 22px; letter-spacing: .04em; }
+
+/* pixel labels at their native 12 px */
+body.lang-zh .sc, body.lang-zh .kicker, body.lang-zh .scroll-cue, body.lang-zh .gauge a, body.lang-zh .layout-switch button,
+body.lang-zh .finishes button, body.lang-zh .pile-label small, body.lang-zh #notes dt, body.lang-zh .specimen span:last-child,
+body.lang-zh .isle span, body.lang-zh .isle.minor span { font-size: 12px; }
+body.lang-zh .kicker, body.lang-zh .scroll-cue { letter-spacing: .3em; }
+body.lang-zh .gauge a { letter-spacing: .1em; }
+body.lang-zh .isle span { letter-spacing: .24em; }
+body.lang-zh .layout-switch button { letter-spacing: .2em; }
+body.lang-zh .finishes button { letter-spacing: .12em; }
+body.lang-zh .isle em { font-size: 13px; line-height: 1.6; }
+
+@media (max-width: 720px) {
+  body.lang-zh .hero h1 { font-size: 72px; }
+  body.lang-zh .chapter-copy h2, body.lang-zh #notes h2 { font-size: 36px; }
+  body.lang-zh .finish-name { font-size: 24px; }
+  body.lang-zh .pile-label span { font-size: 12px; }
+  body.lang-zh .lede { font-size: 18px; }
+  .mast-links { gap: 1rem; }
+}
+.nw { white-space: nowrap; }

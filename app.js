@@ -43,13 +43,50 @@ const FONT_SETS = {
   const $ = (q) => document.querySelector(q);
   const $$ = (q) => [...document.querySelectorAll(q)];
 
+  // ───────────────────────── language: English (in the page) or Chinese (i18n.js)
+  // ?lang=zh|en wins, then the visitor's last choice, then English. Switching swaps every [data-i18n] element's
+  // text and [data-i18n-aria] label in place, then runs the hooks that rebuild text made here in app.js.
+  const ZH = window.BEACH_ZH;
+  const LANG_KEY = "beachcombing-lang";
+  let lang = "en";
+  try {
+    const q = new URLSearchParams(location.search).get("lang");
+    lang = q === "zh" || q === "en" ? q : localStorage.getItem(LANG_KEY) === "zh" ? "zh" : "en";
+  } catch (e) { /* no storage: English */ }
+  if (!ZH) lang = "en";
+  const zh = () => lang === "zh";
+  const langHooks = [];
+  function applyLang(next) {
+    lang = next;
+    for (const el of $$("[data-i18n]")) {
+      if (el.dataset.en === undefined) el.dataset.en = el.innerHTML;
+      const t = ZH && ZH.html[el.dataset.i18n];
+      el.innerHTML = zh() && t != null ? t : el.dataset.en;
+    }
+    for (const el of $$("[data-i18n-aria]")) {
+      if (el.dataset.enAria === undefined) el.dataset.enAria = el.getAttribute("aria-label");
+      const t = ZH && ZH.aria[el.dataset.i18nAria];
+      el.setAttribute("aria-label", zh() && t ? t : el.dataset.enAria);
+    }
+    document.documentElement.lang = zh() ? "zh-Hans" : "en";
+    document.title = zh() ? ZH.title : "Beachcombing";
+    document.body.classList.toggle("lang-zh", zh());
+    const btn = $("#lang");
+    if (btn && ZH) {
+      btn.textContent = ZH.langButton[lang];
+      btn.setAttribute("aria-label", ZH.langAria[lang]);
+      btn.setAttribute("lang", zh() ? "en" : "zh-Hans"); // the button names the other language, in that language
+    }
+    langHooks.forEach((f) => f());
+  }
+
   // ───────────────────────── renderer, scene, camera
   const canvas = $("#stage");
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   } catch (e) {
-    $("#veil .veil-sub").textContent = "This artwork needs WebGL, which is unavailable in this browser.";
+    $("#veil .veil-sub").textContent = zh() ? ZH.noWebGL : "This artwork needs WebGL, which is unavailable in this browser.";
     return;
   }
   // the pixel ratio starts at the screen's (up to 1.75); it steps down only if frames are clearly slow and back up
@@ -652,17 +689,21 @@ const FONT_SETS = {
 
   // pile labels in HTML
   const labelBox = $("#pile-labels");
-  const labelEls = piles.map((p) => {
+  const shellsText = (n) => (zh() ? ZH.shells(n) : `${n} shells`);
+  const groupName = (k) => (zh() ? ZH.groups[k] : GROUPS[k]);
+  const labelEls = piles.map(() => {
     const el = document.createElement("div");
     el.className = "pile-label";
-    el.innerHTML = `<b>${ROMAN[p.k]}.</b><span>${p.name}</span><small>${p.members.length} shells</small>`;
     labelBox.appendChild(el);
     return el;
   });
   const scanLabel = document.createElement("div");
   scanLabel.className = "pile-label scan-label";
-  scanLabel.innerHTML = `<b>64</b><small>numbers</small>`;
   labelBox.appendChild(scanLabel);
+  langHooks.push(() => {
+    piles.forEach((p, k) => (labelEls[k].innerHTML = `<b>${ROMAN[p.k]}.</b><span>${groupName(p.k)}</span><small>${shellsText(p.members.length)}</small>`));
+    scanLabel.innerHTML = `<b>64</b><small>${zh() ? ZH.scanNumbers : "numbers"}</small>`;
+  });
 
   // the archipelago's names, shown at the bench in the free arrangement only. Each group's largest island (shells
   // within 1.3 units of one another) carries its name, anchored on the member nearest the island's centre so the
@@ -701,10 +742,9 @@ const FONT_SETS = {
   ISLES.forEach((d, k) => {
     const members = shell.filter((sh) => sh.s.cluster === k + 1);
     const free = islands(members, 1.3);
-    const make = (cls, html) => {
+    const make = (cls) => {
       const el = document.createElement("div");
       el.className = cls;
-      el.innerHTML = html;
       el.addEventListener("click", () => {
         const open = !el.classList.contains("open");
         isles.forEach((o) => o.el.classList.remove("open"));
@@ -714,15 +754,22 @@ const FONT_SETS = {
       return el;
     };
     isles.push({
-      el: make("isle", `<b>${ROMAN[k]}</b><span>${d.name}</span><em>${d.text}<small>${members.length} shells</small></em>`),
-      at: free[0].at,
+      el: make("isle"), at: free[0].at,
+      html: () => {
+        const t = zh() ? ZH.isles[k] : d;
+        return `<b>${ROMAN[k]}</b><span>${t.name}</span><em>${t.text}<small>${shellsText(members.length)}</small></em>`;
+      },
     });
     if (d.minor && free[1] && free[1].size >= 15)
       isles.push({
-        el: make("isle minor", `<span>${d.minor}</span><em>A second shore of the same: ${free[1].size} shells that settled apart.</em>`),
-        at: free[1].at,
+        el: make("isle minor"), at: free[1].at,
+        html: () => zh()
+          ? `<span>${ZH.isles[k].minor}</span><em>${ZH.minorIsle(free[1].size)}</em>`
+          : `<span>${d.minor}</span><em>A second shore of the same: ${free[1].size} shells that settled apart.</em>`,
       });
   });
+  // the names change size with the language, so they are measured and placed afresh
+  langHooks.push(() => isles.forEach((isle) => { isle.el.innerHTML = isle.html(); isle.w = 0; isle.dx = isle.dy = undefined; }));
   const SVG = "http://www.w3.org/2000/svg";
   const leaderSvg = document.createElementNS(SVG, "svg");
   leaderSvg.setAttribute("class", "isles-leaders");
@@ -959,6 +1006,7 @@ const FONT_SETS = {
   let mouseX = 0, mouseY = 0, mxS = 0, myS = 0;
   let gridTarget = 0, gridMix = 0, gridMixDrawn = -1;
   let finishManual = null, wipeAnim = null, finishShown = -1;
+  langHooks.push(() => { finishShown = -1; keepOutAt = 0; }); // the finish copy is rewritten on the next frame
   let benchOn = false, captureNext = false;
   const vhPx = () => Math.max(1, innerHeight) / 100;
   addEventListener("scroll", () => (sTarget = scrollY / vhPx()), { passive: true });
@@ -976,9 +1024,10 @@ const FONT_SETS = {
     $$(".layout-switch button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.layout === mode)));
     $("#layout-note").textContent =
       mode === "grid"
-        ? "Grid: the same shells assigned to an 18 × 18 wall of 100 mm tiles. 300 are occupied and 24 left empty."
-        : "Free: an archipelago at the original t-SNE positions. Where shells overlap, their heights add.";
+        ? (zh() ? ZH.layoutGrid : "Grid: the same shells assigned to an 18 × 18 wall of 100 mm tiles. 300 are occupied and 24 left empty.")
+        : (zh() ? ZH.layoutFree : "Free: an archipelago at the original t-SNE positions. Where shells overlap, their heights add.");
   }
+  langHooks.push(() => setLayout(gridTarget ? "grid" : "free"));
   $$(".finishes button").forEach((b) =>
     b.addEventListener("click", () => {
       const k = +b.dataset.finish;
@@ -995,10 +1044,18 @@ const FONT_SETS = {
     })
   );
   $("#save").addEventListener("click", () => (captureNext = true));
+  const tideLabel = () => ($("#tide").textContent = tide.paused
+    ? (zh() ? ZH.tideRun : "Let the tide run")
+    : (zh() ? ZH.tideStill : "Still the tide"));
   $("#tide").addEventListener("click", (e) => {
     tide.paused = !tide.paused;
     e.currentTarget.setAttribute("aria-pressed", String(tide.paused));
-    e.currentTarget.textContent = tide.paused ? "Let the tide run" : "Still the tide";
+    tideLabel();
+  });
+  langHooks.push(tideLabel);
+  $("#lang").addEventListener("click", () => {
+    applyLang(zh() ? "en" : "zh");
+    try { localStorage.setItem(LANG_KEY, lang); } catch (e) { /* the choice just isn't remembered */ }
   });
   const notes = $("#notes");
   $("#isle-names").addEventListener("click", (e) => {
@@ -1022,15 +1079,20 @@ const FONT_SETS = {
     const X = (i) => 30 + (i / (n - 1)) * 282, Y = (v) => 10 + (1 - (Math.log(v) - lo) / (hi - lo)) * 80;
     const path = (arr) => arr.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
     const bx = X(T.best - 1).toFixed(1);
-    $("#loss").innerHTML =
-      `<path class="ax" d="M30,6V92H312"/>` +
-      `<path class="tr" d="${path(tr)}"/><path class="va" d="${path(va)}"/>` +
-      `<line class="best" x1="${bx}" x2="${bx}" y1="10" y2="92"/>` +
-      `<text x="30" y="106">1</text><text x="312" y="106" text-anchor="end">${n}</text>` +
-      `<text x="${+bx - 4}" y="18" text-anchor="end">best · ${T.best}</text>` +
-      `<text x="36" y="14">error (log)</text>` +
-      `<text class="k-tr" x="312" y="${(Y(tr[n - 1]) + 13).toFixed(1)}" text-anchor="end">training</text>` +
-      `<text class="k-va" x="312" y="${(Y(va[n - 1]) - 6).toFixed(1)}" text-anchor="end">held out</text>`;
+    const drawLoss = () => {
+      const L = zh() ? ZH.loss : { axis: "error (log)", best: "best", training: "training", heldOut: "held out" };
+      $("#loss").innerHTML =
+        `<path class="ax" d="M30,6V92H312"/>` +
+        `<path class="tr" d="${path(tr)}"/><path class="va" d="${path(va)}"/>` +
+        `<line class="best" x1="${bx}" x2="${bx}" y1="10" y2="92"/>` +
+        `<text x="30" y="106">1</text><text x="312" y="106" text-anchor="end">${n}</text>` +
+        `<text x="${+bx - 4}" y="18" text-anchor="end">${L.best} · ${T.best}</text>` +
+        `<text x="36" y="14">${L.axis}</text>` +
+        // above its own line, between the two curves, clear of the round count on the axis below
+        `<text class="k-tr" x="312" y="${(Y(tr[n - 1]) - 5).toFixed(1)}" text-anchor="end">${L.training}</text>` +
+        `<text class="k-va" x="312" y="${(Y(va[n - 1]) - 6).toFixed(1)}" text-anchor="end">${L.heldOut}</text>`;
+    };
+    langHooks.push(drawLoss);
   }
 
   // mouse and pen: drag to move through the story, with a little glide on release.
@@ -1129,9 +1191,10 @@ const FONT_SETS = {
     const s0 = D.shells[id];
     $("#sp-no").textContent = String(s0.id).padStart(3, "0");
     $("#sp-name").textContent = s0.species;
+    const roman = ROMAN[s0.cluster - 1], group = zh() ? ZH.groupOf(roman) : `Group ${roman}`;
     $("#sp-group").textContent = s > 400 && s < 570
-      ? `${s0.val ? "Held out" : "Training"} · Group ${ROMAN[s0.cluster - 1]}`
-      : `Group ${ROMAN[s0.cluster - 1]} · ${GROUPS[s0.cluster - 1]}`;
+      ? `${s0.val ? (zh() ? ZH.heldOut : "Held out") : (zh() ? ZH.training : "Training")} · ${group}`
+      : `${group} · ${groupName(s0.cluster - 1)}`;
     tag.style.left = Math.min(hover.x, innerWidth - 230) + "px";
     tag.style.top = Math.min(hover.y, innerHeight - 90) + "px";
     tag.classList.add("on");
@@ -1304,8 +1367,9 @@ const FONT_SETS = {
     document.body.classList.toggle("theme-dark", !paper);
     if (shownFinish !== finishShown) {
       finishShown = shownFinish;
-      $("#finish-name").textContent = FINISHES[shownFinish].name;
-      $("#finish-text").textContent = FINISHES[shownFinish].text;
+      const f = zh() ? ZH.finishes[shownFinish] : FINISHES[shownFinish];
+      $("#finish-name").textContent = f.name;
+      $("#finish-text").textContent = f.text;
       $$(".finishes button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.finish === shownFinish)));
     }
 
@@ -1514,6 +1578,8 @@ const FONT_SETS = {
     const relief = warmTerrain();
     if (startsAtTheEnd) await relief;
   }
+
+  applyLang(lang); // before the veil lifts, so a Chinese visit never flashes English
 
   Promise.all([loadTex(D.rgbAtlas), loadTex(D.depthAtlas), loadTex(D.reconAtlas)]).then(async ([rgb, dep, rec]) => {
     shellU.uRgb.value = rgb;
