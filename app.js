@@ -1247,7 +1247,9 @@ const FONT_SETS = {
     const sortT = seg(s, 568, 688);
     const layT = seg(s, 745, 860);
     const boardT = smooth(seg(s, 400, 520));
-    const fuse = seg(s, 908, 975);
+    // the shells fuse into the relief only once its shader is ready, easing in over about a second if that happens late
+    if (terrainReady) fuseGate = Math.min(1, fuseGate + dt * 1.2);
+    const fuse = seg(s, 908, 975) * fuseGate;
 
     // ── tide and arrivals
     if (!tide.paused) tide.t += dt * (reduceMotion ? 0.6 : 1);
@@ -1478,22 +1480,39 @@ const FONT_SETS = {
   }
   addEventListener("resize", resize);
 
-  // compile every shader and draw everything once behind the loading veil, so no chapter stalls the first time it appears
-  // (the finished relief's shader is large; compiled on first sight it froze the page on slower machines)
-  async function warmUp() {
-    const hidden = [terrain, scan, shells, shadows].filter((o) => !o.visible);
+  // Shaders are compiled ahead, so no chapter stalls the first time it appears. Behind the loading veil only what the
+  // shore and the chapters need (about half a second); the finished relief's shader, which alone takes several seconds
+  // to compile on some machines, compiles in the background meanwhile (browsers with parallel shader compiling do it
+  // off the main thread). Until it is ready the shells simply stay in view instead of fusing; when the visit starts at
+  // the end (a reload there, or a ?finish link) the veil waits for it too.
+  let terrainReady = false, fuseGate = 0;
+  async function compile(sceneToCompile, cam) {
+    try { if (renderer.compileAsync) await renderer.compileAsync(sceneToCompile, cam); } catch (e) { /* compiles on first draw instead */ }
+  }
+  function warmTerrain() {
+    const probe = new THREE.Scene();
+    probe.add(new THREE.Mesh(terrain.geometry, terrain.material)); // shares the relief's material, so its program is the one compiled
+    const target = new THREE.WebGLRenderTarget(4, 4);
+    return compile(probe, camera).then(() => {
+      drawHeight();
+      renderer.setRenderTarget(target); // one tiny draw does any work a driver leaves for first use
+      renderer.render(probe, camera);
+      renderer.setRenderTarget(null);
+      target.dispose();
+      terrainReady = true;
+    });
+  }
+  async function warmUp(startsAtTheEnd) {
+    scene.remove(terrain); // compiled separately, below
+    const hidden = [scan, shells, shadows].filter((o) => !o.visible);
     hidden.forEach((o) => (o.visible = true));
     placeCamera(0, 0, 0);
-    try {
-      if (renderer.compileAsync) {
-        await renderer.compileAsync(rtScene, rtCam);
-        await renderer.compileAsync(blurScene, blurCam);
-        await renderer.compileAsync(scene, camera);
-      }
-    } catch (e) { /* fall back to compiling on first draw */ }
-    drawHeight(); // also uploads the textures
-    renderer.render(scene, camera);
+    await Promise.all([compile(rtScene, rtCam), compile(blurScene, blurCam), compile(scene, camera)]);
+    renderer.render(scene, camera); // also uploads the textures
     hidden.forEach((o) => (o.visible = false));
+    scene.add(terrain);
+    const relief = warmTerrain();
+    if (startsAtTheEnd) await relief;
   }
 
   Promise.all([loadTex(D.rgbAtlas), loadTex(D.depthAtlas), loadTex(D.reconAtlas)]).then(async ([rgb, dep, rec]) => {
@@ -1501,7 +1520,6 @@ const FONT_SETS = {
     shellU.uDepth.value = dep;
     shellU.uRecon.value = rec;
     resize();
-    await warmUp();
     // deep links: ?chapter=3, any scroll position in vh (?s=505), or the finished work, e.g. ?finish=nacre&layout=grid&names
     const q = new URLSearchParams(location.search);
     const fq = FINISHES.findIndex((f) => f.name.toLowerCase() === (q.get("finish") || "").toLowerCase());
@@ -1515,6 +1533,7 @@ const FONT_SETS = {
     } else if (q.has("s")) {
       scrollTo(0, clamp(+q.get("s"), 0, 1200) * vhPx());
     }
+    await warmUp(scrollY / vhPx() > 880); // a visit that opens at the end needs the finished relief before the veil lifts
     sTarget = scrollY / vhPx();
     sNow = sTarget;
     requestAnimationFrame((t) => {
