@@ -30,7 +30,6 @@ const FONT_SETS = {
   const N = D.shells.length;
   const EXAG = 2.0; // relief drawn at 2× for legibility (stated in the field notes)
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-
   // ───────────────────────── helpers
   const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -48,13 +47,14 @@ const FONT_SETS = {
   const canvas = $("#stage");
   let renderer;
   try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    // multisampling only on low-density screens: at 1.5x and above edges are fine without it, and it is costly
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: devicePixelRatio < 1.5, powerPreference: "high-performance" });
   } catch (e) {
     $("#veil .veil-sub").textContent = "This artwork needs WebGL, which is unavailable in this browser.";
     return;
   }
-  // the pixel ratio starts at the screen's (up to 1.75) and steps down if frames run slow (see frame())
-  const PR_MAX = Math.min(devicePixelRatio, 1.75), PR_MIN = Math.min(PR_MAX, 0.75);
+  // the pixel ratio starts at the screen's (up to 1.5) and steps down if frames run slow (see frame())
+  const PR_MAX = Math.min(devicePixelRatio, 1.5), PR_MIN = Math.min(PR_MAX, 0.75);
   let pixelRatio = PR_MAX;
   renderer.setPixelRatio(pixelRatio);
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // shaders write display colours directly
@@ -81,6 +81,8 @@ const FONT_SETS = {
     float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
       return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
     float fbm(vec2 p){ float a=.5, s=0.; for(int i=0;i<5;i++){ s+=a*vnoise(p); p=p*2.03+17.1; a*=.5; } return s; }
+    // three octaves, for broad slow patterns whose fine octaves are not visible anyway (rescaled to the same range)
+    float fbm3(vec2 p){ float a=.5, s=0.; for(int i=0;i<3;i++){ s+=a*vnoise(p); p=p*2.03+17.1; a*=.5; } return s * (.96875/.875); }
     float revealField(vec2 xz){ return length(xz)/14. + (fbm(xz*.32)-.5)*.32; }
   `;
   // the sea the finished islands stand in: the finish's ground colour, crossed by engraved ripple lines
@@ -88,13 +90,13 @@ const FONT_SETS = {
     vec3 seaCol(vec2 p, vec3 base, float t){
       float lum = dot(base, vec3(.3,.59,.11));
       vec3 ink = lum > .5 ? base * vec3(.62,.64,.68) : base + vec3(.07,.08,.09);
-      float y = p.y*2.4 + .5*sin(p.x*.45 + t*.2) + (fbm(p*.2 + t*.01) - .5)*1.6;
+      float y = p.y*2.4 + .5*sin(p.x*.45 + t*.2) + (fbm3(p*.2 + t*.01) - .5)*1.6;
       float w = fwidth(y);
       float dl = min(fract(y), 1. - fract(y));                       // distance to the nearest ripple line
       float line = 1. - smoothstep(.01, .01 + w*1.2, dl);
       line *= 1. - smoothstep(.12, .35, w);                          // far away the lines fade rather than alias
-      line *= smoothstep(.45, .65, fbm(vec2(p.x*.5, p.y*1.4) + t*.02));
-      return mix(base * (.97 + .05*fbm(p*.3)), ink, line * .4);
+      line *= smoothstep(.45, .65, fbm3(vec2(p.x*.5, p.y*1.4) + t*.02));
+      return mix(base * (.97 + .05*fbm3(p*.3)), ink, line * .4);
     }
   `;
 
@@ -125,20 +127,26 @@ const FONT_SETS = {
         varying vec3 vP;
         float edge(float x){ return .5*sin(x*.29+uEdge.x) + .28*sin(x*.71+uEdge.y) + .12*sin(x*1.7+uEdge.z); }
         // foam intensity evaluated at a point (used once per "digital" dot cell)
+        // each noise term is only evaluated where its weight is not zero (the same picture, far fewer fbm calls)
         float foamAt(vec2 p){
           float fz = uFront + edge(p.x);
           float d = fz - p.y;                       // > 0 under water
           float band = exp(-abs(d)*5.5) * (1. - uRecede*.55);
-          float lace = smoothstep(.52, .78, fbm(vec2(p.x*.9, p.y*1.6 - uTime*.35))) * smoothstep(2.6, 0., d) * step(0., d);
-          float swell = pow(.5+.5*sin((p.y - uTime*.9 + .6*edge(p.x*1.3))*2.4), 30.) * smoothstep(0., 3.5, d) * (.18 + .22*fbm(p*.6 + uTime*.1));
-          float wake = smoothstep(.62, .9, fbm(p*vec2(1.1, 2.4) + 3.)) * step(d, 0.) * smoothstep(uReach+.4, uReach-1.5, p.y) * smoothstep(-.4, .9, -d) * .35 * (1.-uRecede);
+          float lace = 0., swell = 0., wake = 0.;
+          if (d > 0. && d < 2.6) lace = smoothstep(.52, .78, fbm(vec2(p.x*.9, p.y*1.6 - uTime*.35))) * smoothstep(2.6, 0., d);
+          if (d > 0.) {
+            float crest = pow(.5+.5*sin((p.y - uTime*.9 + .6*edge(p.x*1.3))*2.4), 30.) * smoothstep(0., 3.5, d);
+            if (crest > .002) swell = crest * (.18 + .22*fbm(p*.6 + uTime*.1));
+          } else if (p.y < uReach + .4 && uRecede < 1.) {
+            wake = smoothstep(.62, .9, fbm(p*vec2(1.1, 2.4) + 3.)) * smoothstep(uReach+.4, uReach-1.5, p.y) * smoothstep(-.4, .9, -d) * .35 * (1.-uRecede);
+          }
           return clamp(band + lace + swell + wake, 0., 1.) * uTide;
         }
         void main(){
           vec2 p = vP.xz;
           // once the shore has become the workshop floor, skip the sand, the water and the sun
           if (uBoard > .999) {
-            vec3 floorCol = uGround * (.92 + .16*fbm(p*.7)) + (hash(p*211.)-.5)*.02;
+            vec3 floorCol = uGround * (.92 + .16*fbm3(p*.7)) + (hash(p*211.)-.5)*.02;
             gl_FragColor = vec4(uSea > .001 ? mix(floorCol, seaCol(p, uGround, uTime), uSea) : floorCol, 1.);
             return;
           }
@@ -151,10 +159,9 @@ const FONT_SETS = {
           // wet sand left by the backwash
           float wet = step(fz, p.y) * smoothstep(uReach+.25, uReach-2.2, p.y) * uTide;
           col *= 1. - wet*.42;
-          col += wet * .05 * pow(fbm(p*vec2(.6,3.)+uTime*.05), 3.);
+          if (wet > .001) col += wet * .05 * pow(fbm(p*vec2(.6,3.)+uTime*.05), 3.);
           // the sea
-          vec3 sea = vec3(.018,.021,.024) + .012*fbm(p*.5+uTime*.08);
-          col = mix(col, sea, water * uTide);
+          if (water * uTide > .001) col = mix(col, vec3(.018,.021,.024) + .012*fbm(p*.5+uTime*.08), water * uTide);
           // digital foam: a lattice of dots whose size follows foam intensity
           if (uTide > .001) {
             float cell = .085;
@@ -171,12 +178,14 @@ const FONT_SETS = {
           col += vec3(.20,.13,.06) * sun * (.6 + .4*tone);
           col += vec3(.03,.02,.01) * smoothstep(uSunX, uSunX-6., p.x) * uSun;
           // later chapters: the shore darkens into the workshop floor, and at the end into a sea
-          col = mix(col, uGround * (.92 + .16*fbm(p*.7)) + (hash(p*211.)-.5)*.02, uBoard);
+          if (uBoard > .001) col = mix(col, uGround * (.92 + .16*fbm(p*.7)) + (hash(p*211.)-.5)*.02, uBoard);
           if (uSea > .001) col = mix(col, seaCol(p, uGround, uTime), uSea);
           gl_FragColor = vec4(col, 1.);
         }`,
     })
   );
+  // drawn after the other opaque things (shells, the relief), so the depth test skips every sand pixel they cover
+  sand.renderOrder = 10;
   scene.add(sand);
 
   // ───────────────────────── shells (instanced reliefs)
@@ -233,7 +242,7 @@ const FONT_SETS = {
         gl_FragColor = vec4(mix(base * lit, vec3(.72,.24,.14), frame), 1.);
       }`,
   });
-  const shellGeo = new THREE.PlaneGeometry(1, 1, 44, 44).rotateX(-Math.PI / 2);
+  const shellGeo = new THREE.PlaneGeometry(1, 1, 32, 32).rotateX(-Math.PI / 2); // a shell is rarely over 100 px on screen
   const aCell = new Float32Array(N * 2);
   D.shells.forEach((s, i) => {
     aCell[i * 2] = i % D.cols;
@@ -408,7 +417,7 @@ const FONT_SETS = {
     uTime: sandU.uTime,
   };
   const terrain = new THREE.Mesh(
-    new THREE.PlaneGeometry(BOARD, BOARD, 440, 440).rotateX(-Math.PI / 2),
+    new THREE.PlaneGeometry(BOARD, BOARD, 360, 360).rotateX(-Math.PI / 2),
     new THREE.ShaderMaterial({
       uniforms: terrU,
       vertexShader: `
@@ -471,7 +480,7 @@ const FONT_SETS = {
           return mix(paper * mix(.86, 1., level), vec3(.29,.2,.13), ink);
         }
         vec3 contour(){
-          vec3 bg = vec3(.045,.047,.05) * (.85 + .3*fbm(vP.xz*.6));
+          vec3 bg = vec3(.045,.047,.05) * (.85 + .3*fbm3(vP.xz*.6));
           float hs = .55 + .45*max(dot(n, uLight), 0.);
           float f = hb / 2., F = hb / 10.;
           float minor = 1. - smoothstep(0., fwidth(f)*1.25, .5 - abs(fract(f) - .5));
@@ -508,8 +517,9 @@ const FONT_SETS = {
           return nacre();
         }
         void main(){
-          float rv = revealField(vP.xz);
+          // once fully fused the reveal pattern (5 noise octaves a pixel) no longer matters: it never exceeds 1.23 < thr
           float thr = uReveal*1.5 - .12;
+          float rv = uReveal < .999 ? revealField(vP.xz) : 0.;
           if (rv > thr) discard;
           vec4 t0 = T(vec2(0));
           h = t0.r;
@@ -525,25 +535,34 @@ const FONT_SETS = {
           ao = clamp(1. - max(b1 - h, 0.)*.09 - max(b2 - h, 0.)*.05, .35, 1.);
           cav = clamp((b1 - h)*.25, 0., 1.);
           lap = H(vec2(1,0)) + H(vec2(-1,0)) + H(vec2(0,1)) + H(vec2(0,-1)) - 4.*h;
-          vec3 col;
-          if (uWipe <= 0.001) col = finish(uFinA);
-          else if (uWipe >= .999) col = finish(uFinB);
-          else {
-            // a polishing pass sweeps diagonally across the work
-            float e = (vP.x*.8 - vP.z*.6)/uWorld + .5 + (fbm(vP.xz*.9)-.5)*.08;
-            float front = uWipe*1.3 - .15;
-            col = mix(finish(uFinA), finish(uFinB), smoothstep(front + .012, front - .012, e));
-            col += vec3(1.,.93,.8) * exp(-abs(e - front)*140.) * .55;
-          }
-          // the sea between the islands, with coastal ripples that echo each shore like a chart
           float land = max(smoothstep(.15, .8, h), smoothstep(.3, .7, t0.g));
           float near = bl.b;
-          float ring = fract(near*7.);
-          float coastal = (1. - smoothstep(0., fwidth(near*7.)*1.4, min(ring, 1. - ring))) * smoothstep(.0, .05, near) * (1. - smoothstep(.25, .5, near));
+          float nearW = fwidth(near*7.);  // derivatives taken before any branch
+          // skip the finish in open sea far from any shell, and the sea deep inside the islands: in both places the
+          // skipped colour has no weight, and the boundaries sit well away from the coasts where lines are drawn
+          bool farSea = near < .001 && land < .001;
+          bool inland = max(smoothstep(.6, 1.6, h), smoothstep(.7, 1., t0.g)) > .999;
+          vec3 col = vec3(0.);
+          if (!farSea) {
+            if (uWipe <= 0.001) col = finish(uFinA);
+            else if (uWipe >= .999) col = finish(uFinB);
+            else {
+              // a polishing pass sweeps diagonally across the work
+              float e = (vP.x*.8 - vP.z*.6)/uWorld + .5 + (fbm(vP.xz*.9)-.5)*.08;
+              float front = uWipe*1.3 - .15;
+              col = mix(finish(uFinA), finish(uFinB), smoothstep(front + .012, front - .012, e));
+              col += vec3(1.,.93,.8) * exp(-abs(e - front)*140.) * .55;
+            }
+          }
+          // the sea between the islands, with coastal ripples that echo each shore like a chart
           float lum = dot(uSeaBase, vec3(.3,.59,.11));
-          vec3 sea = seaCol(vP.xz, uSeaBase, uTime);
-          sea = mix(sea, lum > .5 ? uSeaBase * vec3(.6,.62,.66) : uSeaBase + vec3(.12,.13,.14), coastal * .6);
-          col = mix(sea, col, land);
+          if (!inland) {
+            float ring = fract(near*7.);
+            float coastal = (1. - smoothstep(0., nearW*1.4, min(ring, 1. - ring))) * smoothstep(.0, .05, near) * (1. - smoothstep(.25, .5, near));
+            vec3 sea = seaCol(vP.xz, uSeaBase, uTime);
+            sea = mix(sea, lum > .5 ? uSeaBase * vec3(.6,.62,.66) : uSeaBase + vec3(.12,.13,.14), coastal * .6);
+            col = mix(sea, col, land);
+          }
           // grid: a fine rule around the square wall of tiles
           vec2 e2 = abs(vP.xz);
           float frameD = abs(max(e2.x, e2.y) - 9.12);
@@ -1124,6 +1143,48 @@ const FONT_SETS = {
   const CH_START = [0, 110, 250, 400, 560, 730, 900];
   const gaugeLinks = $$(".gauge a");
   const gaugeFill = $("#gauge-fill");
+  // the gauge doubles as a scrub bar: drag the knob, or press anywhere on the line, to move through the story.
+  // 0–1 along the line is 0–1190 vh of scroll, as the fill shows; the view eases there like any other scroll.
+  const S_END = 1190;
+  const gaugeTrack = $("#gauge-track"), gaugeKnob = $("#gauge-knob");
+  let gaugeLen = 0, gaugeShown = -1, scrub = null;
+  const measureGauge = () => (gaugeLen = gaugeFill.parentElement.getBoundingClientRect().height - 8);
+  function setGauge(s) {
+    const p = clamp(s / S_END);
+    if (Math.abs(p - gaugeShown) < 0.0005) return; // write only when it has moved
+    gaugeShown = p;
+    if (!gaugeLen) measureGauge();
+    gaugeFill.style.transform = `scaleY(${p.toFixed(4)})`;
+    gaugeKnob.style.transform = `translateY(${(p * gaugeLen).toFixed(1)}px)`;
+    gaugeKnob.setAttribute("aria-valuenow", String(Math.round(p * 100)));
+  }
+  const scrubTo = (clientY) => {
+    const top = gaugeFill.parentElement.getBoundingClientRect().top + 4;
+    scrollTo(0, clamp((clientY - top) / gaugeLen) * S_END * vhPx());
+  };
+  for (const el of [gaugeTrack, gaugeKnob]) {
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      glide = null;
+      measureGauge();
+      scrub = e.pointerId;
+      el.setPointerCapture(e.pointerId);
+      document.body.classList.add("scrubbing");
+      scrubTo(e.clientY);
+    });
+    el.addEventListener("pointermove", (e) => { if (scrub === e.pointerId) scrubTo(e.clientY); });
+    const end = (e) => { if (scrub !== e.pointerId) return; scrub = null; document.body.classList.remove("scrubbing"); };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+  gaugeKnob.addEventListener("keydown", (e) => {
+    const step = { ArrowDown: 10, ArrowRight: 10, ArrowUp: -10, ArrowLeft: -10, PageDown: 60, PageUp: -60 }[e.key];
+    if (step === undefined && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const s = e.key === "Home" ? 0 : e.key === "End" ? S_END : clamp(scrollY / vhPx() + step, 0, S_END);
+    scrollTo(0, s * vhPx());
+  });
   const tally = $("#tally");
   let lastTally = -1;
   function currentFinish() {
@@ -1147,7 +1208,7 @@ const FONT_SETS = {
       a.classList.toggle("on", i <= ch);
       a.classList.toggle("current", i === ch);
     });
-    gaugeFill.style.height = `calc(${clamp(s / 1190) * 100}% - 8px)`;
+    setGauge(s);
     const nowBench = s > 1178;
     if (nowBench !== benchOn) {
       benchOn = nowBench;
@@ -1360,19 +1421,31 @@ const FONT_SETS = {
     perf.prev = now;
     if (dt <= 0 || dt > 120 || document.hidden) return;
     perf.sum += dt; perf.n++;
-    if (perf.n < 45) return;
+    if (perf.n < 20) return;
     const avg = perf.sum / perf.n;
     perf.sum = 0; perf.n = 0;
-    if (avg > 24 && pixelRatio > PR_MIN) {
-      pixelRatio = Math.max(PR_MIN, pixelRatio * 0.8);
+    if (avg > 22 && pixelRatio > PR_MIN) {
+      pixelRatio = Math.max(PR_MIN, pixelRatio * (avg > 40 ? 0.7 : 0.82)); // a bigger step when far too slow
       renderer.setPixelRatio(pixelRatio);
       renderer.setSize(innerWidth, innerHeight, false);
     }
   }
+  // while nothing is being done (no scroll easing, drag, scrub, wipe or layout switch, and no input for a second)
+  // the scene is drawn every other frame: the tide and the light still move smoothly at 30 fps, at half the GPU work.
+  // The resolution check only measures frames drawn at full rate, so the halving is not mistaken for slowness.
+  let lastInput = 0, skipNext = false;
+  for (const ev of ["pointermove", "pointerdown", "wheel", "keydown", "touchstart"]) addEventListener(ev, () => (lastInput = performance.now()), { passive: true });
   function frame(now) {
-    stepGlide(now);
-    update(now);
-    adaptResolution(now);
+    const idle = sNow === sTarget && !drag && !scrollDrag && !glide && scrub === null && !wipeAnim &&
+      Math.abs(gridMix - gridTarget) < 1e-3 && now - lastInput > 1000;
+    if (idle && skipNext) {
+      perf.prev = now;
+    } else {
+      stepGlide(now);
+      update(now);
+      if (idle) perf.prev = now; else adaptResolution(now);
+    }
+    skipNext = idle && !skipNext;
     requestAnimationFrame(frame);
   }
 
@@ -1384,6 +1457,7 @@ const FONT_SETS = {
     layoutPiles(camera.aspect);
     isles.forEach((isle) => { isle.w = 0; isle.dx = isle.dy = undefined; }); // the names are smaller on a phone; place them afresh
     keepOutAt = 0;
+    gaugeLen = 0; gaugeShown = -1; // the gauge's length follows the window height
     sTarget = scrollY / vhPx();
   }
   addEventListener("resize", resize);
@@ -1412,15 +1486,18 @@ const FONT_SETS = {
     shellU.uRecon.value = rec;
     resize();
     await warmUp();
-    // deep links: ?chapter=3, or the finished work, e.g. ?finish=nacre&layout=grid
+    // deep links: ?chapter=3, any scroll position in vh (?s=505), or the finished work, e.g. ?finish=nacre&layout=grid&names
     const q = new URLSearchParams(location.search);
     const fq = FINISHES.findIndex((f) => f.name.toLowerCase() === (q.get("finish") || "").toLowerCase());
+    if (q.has("names")) { namesOn = true; $("#isle-names").setAttribute("aria-pressed", "true"); }
     if (fq >= 0 || q.has("layout")) {
       scrollTo(0, document.documentElement.scrollHeight);
       if (fq >= 0) finishManual = fq;
       if (q.get("layout") === "grid") { setLayout("grid"); gridMix = 1; }
     } else if (q.has("chapter")) {
       scrollTo(0, (CH_START[clamp(+q.get("chapter"), 0, 6)] + 40) * vhPx());
+    } else if (q.has("s")) {
+      scrollTo(0, clamp(+q.get("s"), 0, 1200) * vhPx());
     }
     sTarget = scrollY / vhPx();
     sNow = sTarget;

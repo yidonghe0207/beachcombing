@@ -105,8 +105,20 @@ body.theme-paper .vignette { opacity: .35; }
   display: flex; flex-direction: column; gap: 24px; padding-right: 0;
 }
 .gauge::before { content: ""; position: absolute; right: 3px; top: 4px; bottom: 4px; width: 1px; background: var(--rule); }
-.gauge-fill { position: absolute; right: 3px; top: 4px; width: 1px; height: 0; background: var(--fg); transition: height .2s linear; }
-.gauge a { position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 12px; text-decoration: none; font-family: var(--smallcaps); font-size: 13px; letter-spacing: .08em; color: var(--faint); transition: color .4s; }
+/* the fill and the knob move by transform only (set from app.js), so scrolling never re-lays out the page */
+.gauge-fill { position: absolute; right: 3px; top: 4px; width: 1px; height: calc(100% - 8px); background: var(--fg); transform-origin: 50% 0; transform: scaleY(0); }
+/* drag the knob, or press anywhere on the line, to move through the story */
+.gauge-track { position: absolute; right: -11px; top: 0; bottom: 0; width: 29px; cursor: grab; touch-action: none; }
+.gauge-knob {
+  position: absolute; right: -2px; top: 4px; width: 11px; height: 11px; margin-top: -5.5px; border-radius: 50%;
+  background: var(--fg); box-shadow: 0 0 0 3px var(--ink); cursor: grab; touch-action: none; z-index: 2;
+  transition: width .2s, height .2s, margin .2s, right .2s;
+}
+body.theme-paper .gauge-knob { box-shadow: 0 0 0 3px var(--paper); }
+.gauge-knob:hover, .gauge-knob:focus-visible, body.scrubbing .gauge-knob { width: 15px; height: 15px; margin-top: -7.5px; right: -4px; }
+body.scrubbing, body.scrubbing * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+body.scrubbing .gauge a.current span { opacity: 1; transform: none; }
+.gauge a { position: relative; z-index: 1; display: flex; align-items: center; justify-content: flex-end; gap: 12px; text-decoration: none; font-family: var(--smallcaps); font-size: 13px; letter-spacing: .08em; color: var(--faint); transition: color .4s; }
 .gauge a span { opacity: 0; transform: translateX(6px); transition: opacity .4s, transform .4s var(--ease); white-space: nowrap; }
 .gauge a i { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; background: var(--ink); position: relative; z-index: 1; transition: background .4s; }
 body.theme-paper .gauge a i { background: var(--paper); }
